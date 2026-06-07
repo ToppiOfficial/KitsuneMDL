@@ -2953,7 +2953,7 @@ void WriteKeyValues(studiohdr_t *phdr, std::vector<char> *pKeyValue) {
 
 void CapKeyValues() {
     const char *headCap = "mdlkeyvalue\n{\n";
-    const char *tailCap = "}\\n";
+    const char *tailCap = "}\n";
     if (g_StudioMdlContext.KeyValueText.size()) {
         g_StudioMdlContext.KeyValueText.insert(g_StudioMdlContext.KeyValueText.begin(), headCap,
                                                headCap + std::strlen(headCap));
@@ -2963,7 +2963,7 @@ void CapKeyValues() {
 }
 
 void WriteQCPath() {
-    char relative_qc_path[1024];
+    char relative_qc_path[1024] = {};
     g_pFullFileSystem->FullPathToRelativePathEx(qdir, "CONTENT", relative_qc_path, sizeof(relative_qc_path));
     strcat(relative_qc_path, V_GetFileName(g_fullpath));
 

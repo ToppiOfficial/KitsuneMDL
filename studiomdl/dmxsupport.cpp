@@ -521,21 +521,12 @@ static bool LoadDeltaState(
 }
 
 
-static int GetExtraTexcoordIndex(CDmeVertexData *pVertexData, int nVertexIndex, int nChannel) {
-    FieldIndex_t nFieldIndex = pVertexData->FindFieldIndex(CFmtStr("texcoord$%d", nChannel).Get());
-    if (nFieldIndex < 0)
-        return -1;
-
-    CDmrArrayConst<int> indices(pVertexData->GetIndexData(nFieldIndex));
-    return indices[nVertexIndex];
-}
-
 // JasonM TODO: unify ParseQuadFaceData() and ParseFaceData()
 
 //-----------------------------------------------------------------------------
 // Reads the quad face data from the DMX data
 //-----------------------------------------------------------------------------
-static void ParseQuadFaceData(CDmeVertexData *pVertexData, int material, int *pIndices, int vi, int ni, int *ti) {
+static void ParseQuadFaceData(CDmeVertexData *pVertexData, int material, int *pIndices, int vi, int ni, int *ti, const FieldIndex_t *extraTexcoordFields) {
     s_tmpface_t f;
     f.material = material;
 
@@ -573,14 +564,16 @@ static void ParseQuadFaceData(CDmeVertexData *pVertexData, int material, int *pI
            f.tc[0] <= (unsigned long) g_StudioMdlContext.numtexcoords[0] && f.td[0] <= (unsigned long) g_StudioMdlContext.numtexcoords[0]);
 
     for (int i = 1; i < (MAXSTUDIOTEXCOORDS); ++i) {
-        t = GetExtraTexcoordIndex(pVertexData, pIndices[0], i);
-        f.ta[i] = (t >= 0) ? ti[i] + t : 0;
-        t = GetExtraTexcoordIndex(pVertexData, pIndices[3], i);
-        f.tb[i] = (t >= 0) ? ti[i] + t : 0;
-        t = GetExtraTexcoordIndex(pVertexData, pIndices[2], i);
-        f.tc[i] = (t >= 0) ? ti[i] + t : 0;
-        t = GetExtraTexcoordIndex(pVertexData, pIndices[1], i);
-        f.td[i] = (t >= 0) ? ti[i] + t : 0;
+        FieldIndex_t fi = extraTexcoordFields[i];
+        if (fi < 0) {
+            f.ta[i] = f.tb[i] = f.tc[i] = f.td[i] = 0;
+            continue;
+        }
+        CDmrArrayConst<int> uvIndices(pVertexData->GetIndexData(fi));
+        t = uvIndices[pIndices[0]]; f.ta[i] = (t >= 0) ? ti[i] + t : 0;
+        t = uvIndices[pIndices[3]]; f.tb[i] = (t >= 0) ? ti[i] + t : 0;
+        t = uvIndices[pIndices[2]]; f.tc[i] = (t >= 0) ? ti[i] + t : 0;
+        t = uvIndices[pIndices[1]]; f.td[i] = (t >= 0) ? ti[i] + t : 0;
         Assert(f.ta[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i] && f.tb[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i] &&
                f.tc[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i] && f.td[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i]);
     }
@@ -593,7 +586,7 @@ static void ParseQuadFaceData(CDmeVertexData *pVertexData, int material, int *pI
 //-----------------------------------------------------------------------------
 // Reads the face data from the DMX data
 //-----------------------------------------------------------------------------
-static void ParseFaceData(CDmeVertexData *pVertexData, int material, int v1, int v2, int v3, int vi, int ni, int *ti) {
+static void ParseFaceData(CDmeVertexData *pVertexData, int material, int v1, int v2, int v3, int vi, int ni, int *ti, const FieldIndex_t *extraTexcoordFields) {
     s_tmpface_t f;
     f.material = material;
 
@@ -624,12 +617,15 @@ static void ParseFaceData(CDmeVertexData *pVertexData, int material, int v1, int
            f.tc[0] <= (unsigned long) g_StudioMdlContext.numtexcoords[0]);
 
     for (int i = 1; i < (MAXSTUDIOTEXCOORDS); ++i) {
-        t = GetExtraTexcoordIndex(pVertexData, v1, i);
-        f.ta[i] = (t >= 0) ? ti[i] + t : 0;
-        t = GetExtraTexcoordIndex(pVertexData, v2, i);
-        f.tb[i] = (t >= 0) ? ti[i] + t : 0;
-        t = GetExtraTexcoordIndex(pVertexData, v3, i);
-        f.tc[i] = (t >= 0) ? ti[i] + t : 0;
+        FieldIndex_t fi = extraTexcoordFields[i];
+        if (fi < 0) {
+            f.ta[i] = f.tb[i] = f.tc[i] = 0;
+            continue;
+        }
+        CDmrArrayConst<int> uvIndices(pVertexData->GetIndexData(fi));
+        t = uvIndices[v1]; f.ta[i] = (t >= 0) ? ti[i] + t : 0;
+        t = uvIndices[v2]; f.tb[i] = (t >= 0) ? ti[i] + t : 0;
+        t = uvIndices[v3]; f.tc[i] = (t >= 0) ? ti[i] + t : 0;
         Assert(f.ta[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i] && f.tb[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i] &&
                f.tc[i] <= (unsigned long) g_StudioMdlContext.numtexcoords[i]);
     }
@@ -672,6 +668,11 @@ LoadMesh(CDmeDag *pDmeDag, CDmeMesh *pMesh, CDmeVertexData *pBindState, const ma
     int texture;
     int material;
     char pTextureName[MAX_PATH];
+
+    FieldIndex_t extraTexcoordFields[MAXSTUDIOTEXCOORDS];
+    extraTexcoordFields[0] = -1;
+    for (int ch = 1; ch < MAXSTUDIOTEXCOORDS; ++ch)
+        extraTexcoordFields[ch] = pBindState->FindFieldIndex(CFmtStr("texcoord$%d", ch).Get());
 
     int nFaceSetCount = pMesh->FaceSetCount();
     for (int i = 0; i < nFaceSetCount; ++i) {
@@ -721,7 +722,7 @@ LoadMesh(CDmeDag *pDmeDag, CDmeMesh *pMesh, CDmeVertexData *pBindState, const ma
                 }
 
                 ParseQuadFaceData(pBindState, material, quadIndices, nStartingVertex, nStartingNormal,
-                                  nStartingTexCoord);
+                                  nStartingTexCoord, extraTexcoordFields);
 
                 nFirstIndex += 5; // -1 in list between face indices, so jump over 5 elements, not 4
             } else {
@@ -731,7 +732,7 @@ LoadMesh(CDmeDag *pDmeDag, CDmeMesh *pMesh, CDmeVertexData *pBindState, const ma
                     pMesh->ComputeTriangulatedIndices(pBindState, pFaceSet, nFirstIndex, pIndices, nOutCount);
                     for (int ii = 0; ii < nOutCount; ii += 3) {
                         ParseFaceData(pBindState, material, pIndices[ii], pIndices[ii + 2], pIndices[ii + 1],
-                                      nStartingVertex, nStartingNormal, nStartingTexCoord);
+                                      nStartingVertex, nStartingNormal, nStartingTexCoord, extraTexcoordFields);
                     }
                     free(pIndices);
                 }

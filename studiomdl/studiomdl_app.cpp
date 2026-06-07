@@ -666,7 +666,7 @@ void UsageAndExit() {
              "[-tempcontent]\n"
              "[-nop4]\n"
              "[-newvtx] - write Alien Swarm/CS:GO VTX format (default is TF2/L4D2 compatible)\n"
-             "[-nodx80] - skip dx80.vtx and sw.vtx output (implied by -newvtx)\n"
+             "[-nodx80] - skip dx80.vtx and sw.vtx output\n"
              "[-cullanims] - remove unreferenced $animations to reduce file size\n"
     );
 }
@@ -917,8 +917,6 @@ bool CStudioMDLApp::ParseArguments() {
     g_staticprop = false;
     g_centerstaticprop = false;
     g_bLegacyVTX = !CommandLine()->CheckParm("-newvtx");
-    if (!g_bLegacyVTX)
-        g_StudioMdlContext.noDX80 = true;
 
     g_realignbones = false;
     g_constdirectionalightdot = 0;

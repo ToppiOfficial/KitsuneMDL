@@ -1234,25 +1234,20 @@ namespace OptimizedModel {
     //-----------------------------------------------------------------------------
 
     int COptimizedModel::CountUniqueBones(int count, Vertex_t *pVertex) const {
+        static bool seen[MAXSTUDIOBONES];
+        int touched[MAX_NUM_BONES_PER_VERT * 4];
+        int touchedCount = 0;
         int uniqueBoneCount = 0;
-        int uniqueBoneList[MAX_NUM_BONES_PER_STRIP];
-        while (--count >= 0) {
+        while (--count >= 0)
             for (int i = 0; i < pVertex[count].numBones; ++i) {
-                int boneID = pVertex[count].boneID[i];
-                int j = uniqueBoneCount;
-                while (--j >= 0) {
-                    if (uniqueBoneList[j] == boneID)
-                        break;
-                }
-
-                // Didn't find a match!
-                if (j < 0) {
-                    Assert(uniqueBoneCount < MAX_NUM_BONES_PER_STRIP);
-                    uniqueBoneList[uniqueBoneCount++] = boneID;
+                int b = pVertex[count].boneID[i];
+                if (!seen[b]) {
+                    seen[b] = true;
+                    touched[touchedCount++] = b;
+                    ++uniqueBoneCount;
                 }
             }
-        }
-
+        for (int i = 0; i < touchedCount; i++) seen[touched[i]] = false;
         return uniqueBoneCount;
     }
 
@@ -1313,35 +1308,24 @@ namespace OptimizedModel {
     //-----------------------------------------------------------------------------
 
     void COptimizedModel::BuildFaceBoneData(VertexList_t &list, Face_t &face) {
-        int j, k, l;
+        static bool seen[MAXSTUDIOBONES];
+        int j, k;
         int vertsPerFace = face.vertID[3] == -1 ? 3 : 4;
-        int maxBonesPerFace = MAX_NUM_BONES_PER_VERT * vertsPerFace;
-
-        // Blat out the bone ID state
         face.numBones = 0;
-        for (j = 0; j < maxBonesPerFace; j++) {
-            face.boneID[j] = -1;
-        }
 
-        // Iterate through the vertices in the face
         for (j = 0; j < vertsPerFace; j++) {
-            // Iterate over the bones influencing the vertex
             Vertex_t &vert = list[face.vertID[j]];
             for (k = 0; k < vert.numBones; ++k) {
                 int bone = vert.boneID[k];
                 Assert((bone >= 0) && (bone < m_NumBones));
-
-                // Look for matches with previously found bones
-                for (l = face.numBones; --l >= 0;) {
-                    if (bone == face.boneID[l])
-                        break;
-                }
-
-                // No match, add it to our list
-                if (l < 0)
+                if (!seen[bone]) {
+                    seen[bone] = true;
                     face.boneID[face.numBones++] = bone;
+                }
             }
         }
+        for (j = 0; j < face.numBones; j++)
+            seen[face.boneID[j]] = false;
     }
 
 
@@ -1778,28 +1762,23 @@ namespace OptimizedModel {
     //-----------------------------------------------------------------------------
 
     int COptimizedModel::CountUniqueBonesInStrip(StripGroup_t *pStripGroup, Strip_t *pStrip) {
-        int *boneUsageCounts = (int *) _alloca(m_NumBones * sizeof(intptr_t));
-        memset(boneUsageCounts, 0, sizeof(intptr_t) * m_NumBones);
-        int i;
-        for (i = 0; i < pStrip->numStripGroupVerts; i++) {
+        static bool seen[MAXSTUDIOBONES];
+        int numBones = 0;
+        for (int i = 0; i < pStrip->numStripGroupVerts; i++) {
             Vertex_t *pVert = &pStripGroup->verts[i + pStrip->stripGroupVertexOffset];
             if (!g_staticprop) {
                 Assert(pVert->numBones != 0);
             }
-            int j;
-            for (j = 0; j < pVert->numBones; j++) {
-                int boneID;
-                boneID = pVert->boneID[j];
-                Assert(boneID != 255);
-                boneUsageCounts[boneID]++;
+            for (int j = 0; j < pVert->numBones; j++) {
+                int b = pVert->boneID[j];
+                Assert(b != 255);
+                if (!seen[b]) {
+                    seen[b] = true;
+                    ++numBones;
+                }
             }
         }
-        int numBones = 0;
-        for (i = 0; i < m_NumBones; i++) {
-            if (boneUsageCounts[i]) {
-                numBones++;
-            }
-        }
+        memset(seen, 0, m_NumBones);
         return numBones;
     }
 

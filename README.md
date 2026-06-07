@@ -36,5 +36,5 @@ I'll likely rename the project.
 
 - Valve — Source Engine and SDK
 - [REDxEYE](https://github.com/REDxEYE) — base fork
-- [ficool2](https://github.com/ficool2) — studiomdl++ fixes
-- [Starfelll](https://github.com/Starfelll) — NekoMDL fixes
+- [ficool2](https://github.com/ficool2) — studiomdl++ fixes ideas
+- [Starfelll](https://github.com/Starfelll) — NekoMDL fixes ideas
