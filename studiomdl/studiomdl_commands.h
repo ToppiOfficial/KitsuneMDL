@@ -15,6 +15,7 @@ void Option_Flexrule(s_model_t * pmodel , const char *name);
 int ParseAnimation(s_animation_t *panim, bool isAppend);
 int ParseEmpty(void);
 int ParseSequence(s_sequence_t *pseq, bool isAppend);
+void CullUnreferencedAnimations();
 
 struct MDLCommand_t {
     char *m_pName;

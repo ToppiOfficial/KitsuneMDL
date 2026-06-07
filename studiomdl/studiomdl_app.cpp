@@ -116,21 +116,8 @@ void AddContentPaths() {
 struct GameInfo_t g_gameinfo;
 
 void ParseGameInfo() {
-    bool bParsed = false;
-
-    GameInfo_t gameinfoDefault{0};
-    gameinfoDefault.bSupportsXBox360 = false;
-    gameinfoDefault.bSupportsDX8 = true;
-
-    auto *pKeyValues = new KeyValues("gameinfo.txt");
-    if (g_pFileSystem && pKeyValues->LoadFromFile(g_pFileSystem, "gameinfo.txt")) {
-        bParsed = true;
-    }
-    pKeyValues->deleteThis();
-
-    if (!bParsed) {
-        g_gameinfo = gameinfoDefault;
-    }
+    g_gameinfo.bSupportsXBox360 = false;
+    g_gameinfo.bSupportsDX8 = true;
 }
 
 /*
@@ -679,6 +666,8 @@ void UsageAndExit() {
              "[-tempcontent]\n"
              "[-nop4]\n"
              "[-newvtx] - write Alien Swarm/CS:GO VTX format (default is TF2/L4D2 compatible)\n"
+             "[-nodx80] - skip dx80.vtx and sw.vtx output (implied by -newvtx)\n"
+             "[-cullanims] - remove unreferenced $animations to reduce file size\n"
     );
 }
 
@@ -806,6 +795,8 @@ int CStudioMDLApp::Main() {
 
         SetSkinValues();
 
+        CullUnreferencedAnimations();
+
         SimplifyModel();
 
         ConsistencyCheckSurfaceProp();
@@ -926,6 +917,8 @@ bool CStudioMDLApp::ParseArguments() {
     g_staticprop = false;
     g_centerstaticprop = false;
     g_bLegacyVTX = !CommandLine()->CheckParm("-newvtx");
+    if (!g_bLegacyVTX)
+        g_StudioMdlContext.noDX80 = true;
 
     g_realignbones = false;
     g_constdirectionalightdot = 0;
@@ -1060,8 +1053,18 @@ bool CStudioMDLApp::ParseArguments() {
             continue;
         }
 
+        if (!Q_stricmp(pArgv, "-nodx80")) {
+            g_StudioMdlContext.noDX80 = true;
+            continue;
+        }
+
         if (!Q_stricmp(pArgv, "-nowarnings")) {
             g_StudioMdlContext.bNoWarnings = true;
+            continue;
+        }
+
+        if (!Q_stricmp(pArgv, "-cullanims")) {
+            g_StudioMdlContext.cullAnims = true;
             continue;
         }
 

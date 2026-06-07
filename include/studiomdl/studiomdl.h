@@ -84,6 +84,8 @@ EXTERN  char g_szInternalName[MAX_PATH];
 EXTERN  qboolean cdset;
 EXTERN  int numdirs;
 EXTERN    char cddir[32][MAX_PATH];
+EXTERN  int g_numAddSearchDirs;
+EXTERN  char g_addSearchDirs[16][MAX_PATH];
 EXTERN    int numcdtextures;
 EXTERN    char *cdtextures[16];
 EXTERN  char g_fullpath[MAX_PATH];
@@ -627,6 +629,8 @@ struct s_animation_t {
     bool isImplied;
     bool isOverride;
     bool doesOverride;
+    bool nocull;
+    bool ignorescale;
     int index;
     char name[MAXSTUDIONAME];
     char filename[MAX_PATH];
@@ -1851,6 +1855,7 @@ struct StudioMdlContext {
     unsigned lockBoneLengths: 1;
     unsigned defineBonesLockedByDefault: 1;
     unsigned fastBuild: 1;
+    unsigned noDX80: 1;
     unsigned X360: 1;
     unsigned buildPreview: 1;
     unsigned preserveTriangleOrder: 1;
@@ -1868,6 +1873,7 @@ struct StudioMdlContext {
     unsigned bHasModelName: 1;
     unsigned bMakeVsi: 1;
     unsigned bNoWarnings: 1;
+    unsigned cullAnims: 1;
     int g_maxWarnings = -1;
     char g_path[1024];
 
@@ -1937,6 +1943,7 @@ struct StudioMdlContext {
               lockBoneLengths(0),
               defineBonesLockedByDefault(1),
               fastBuild(0),
+              noDX80(0),
               X360(0),
               buildPreview(0),
               preserveTriangleOrder(0),

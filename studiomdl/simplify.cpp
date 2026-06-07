@@ -186,6 +186,9 @@ void processAnimations() {
                     break;
                 case CMD_SUBTRACT:
                     panim->flags |= STUDIO_DELTA;
+                    if (pcmd->u.subtract.ref && pcmd->u.subtract.ref->ignorescale != panim->ignorescale)
+                        MdlWarning("animation \"%s\" subtract ref \"%s\" has mismatched ignorescale — scale mismatch likely\n",
+                                   panim->name, pcmd->u.subtract.ref->name);
                     subtractBaseAnimations(pcmd->u.subtract.ref, panim, pcmd->u.subtract.frame, pcmd->u.subtract.flags);
                     break;
                 case CMD_AO: {
@@ -196,11 +199,17 @@ void processAnimations() {
                             MdlError("unable to find bone %s to alignbone\n", pcmd->u.ao.pBonename);
                         }
                     }
+                    if (pcmd->u.ao.ref && pcmd->u.ao.ref->ignorescale != panim->ignorescale)
+                        MdlWarning("animation \"%s\" AO ref \"%s\" has mismatched ignorescale — scale mismatch likely\n",
+                                   panim->name, pcmd->u.ao.ref->name);
                     processAutoorigin(pcmd->u.ao.ref, panim, pcmd->u.ao.motiontype, pcmd->u.ao.srcframe,
                                       pcmd->u.ao.destframe, bone);
                 }
                     break;
                 case CMD_MATCH:
+                    if (pcmd->u.match.ref && pcmd->u.match.ref->ignorescale != panim->ignorescale)
+                        MdlWarning("animation \"%s\" match ref \"%s\" has mismatched ignorescale — scale mismatch likely\n",
+                                   panim->name, pcmd->u.match.ref->name);
                     processMatch(pcmd->u.match.ref, panim, false);
                     break;
                 case CMD_FIXUP:
@@ -305,7 +314,7 @@ void processAnimations() {
                     int bone = findGlobalBone(pcmd->u.forceboneposrot.pBonename);
                     if (bone != -1) {
                         Vector vecPos = Vector(pcmd->u.forceboneposrot.pos[0], pcmd->u.forceboneposrot.pos[1],
-                                               pcmd->u.forceboneposrot.pos[2]);
+                                               pcmd->u.forceboneposrot.pos[2]) * g_currentscale * panim->scale;
                         QAngle angRot = QAngle(pcmd->u.forceboneposrot.rot[0], pcmd->u.forceboneposrot.rot[1],
                                                pcmd->u.forceboneposrot.rot[2]);
 
@@ -1654,8 +1663,9 @@ void RemapAnimations() {
         for (j = 0; j < panim->numframes; j++) {
             panim->sanim[j] = (s_bone_t *) calloc(1, size);
 
-            ConvertAnimation(psource, panim->animationname, n + j, panim->scale, panim->adjust, panim->rotation,
-                             panim->sanim[j]);
+            ConvertAnimation(psource, panim->animationname, n + j,
+                             panim->ignorescale ? panim->scale / g_defaultscale : panim->scale,
+                             panim->adjust, panim->rotation, panim->sanim[j]);
         }
     }
 }
@@ -1996,8 +2006,9 @@ void localHierarchy(s_animation_t *panim, char *pBonename, char *pParentname, in
     for (k = 0; k < pRule->localData.numerror; k++) {
         matrix3x4_t srcBoneToWorld[MAXSTUDIOSRCBONES];
         BuildRawTransforms(panim->source, pAnimationName,
-                           k + pRule->start + panim->startframe - pSourceAnim->startframe, panim->scale, panim->adjust,
-                           panim->rotation, panim->flags, srcBoneToWorld);
+                           k + pRule->start + panim->startframe - pSourceAnim->startframe,
+                           panim->ignorescale ? panim->scale / g_defaultscale : panim->scale,
+                           panim->adjust, panim->rotation, panim->flags, srcBoneToWorld);
 
         TranslateAnimations(panim->source, srcBoneToWorld, boneToWorld);
 
@@ -3635,6 +3646,9 @@ void MakeStaticProp() {
 
     // throw away all animations
     g_numani = 1;
+    if (!g_panimation[0]) {
+        g_panimation[0] = (s_animation_t *) calloc(1, sizeof(s_animation_t));
+    }
     g_panimation[0]->numframes = 1;
     g_panimation[0]->startframe = 0;
     g_panimation[0]->endframe = 1;
@@ -6818,7 +6832,8 @@ static void ProcessIKRules() {
                             matrix3x4_t srcBoneToWorld[MAXSTUDIOSRCBONES];
                             BuildRawTransforms(panim->source, pAnimationName,
                                                k + pRule->start + panim->startframe - pSourceAnim->startframe,
-                                               panim->scale, panim->adjust, panim->rotation, panim->flags,
+                                               panim->ignorescale ? panim->scale / g_defaultscale : panim->scale,
+                                               panim->adjust, panim->rotation, panim->flags,
                                                srcBoneToWorld);
                             TranslateAnimations(panim->source, srcBoneToWorld, boneToWorld);
                         } else {
@@ -6932,7 +6947,8 @@ static void ProcessIKRules() {
                     } else if (pRule->usesource) {
                         matrix3x4_t srcBoneToWorld[MAXSTUDIOSRCBONES];
                         BuildRawTransforms(panim->source, pAnimationName,
-                                           pRule->contact + panim->startframe - pSourceAnim->startframe, panim->scale,
+                                           pRule->contact + panim->startframe - pSourceAnim->startframe,
+                                           panim->ignorescale ? panim->scale / g_defaultscale : panim->scale,
                                            panim->adjust, panim->rotation, panim->flags, srcBoneToWorld);
                         TranslateAnimations(panim->source, srcBoneToWorld, boneToWorld);
                     } else {
@@ -6973,7 +6989,8 @@ static void ProcessIKRules() {
                             matrix3x4_t srcBoneToWorld[MAXSTUDIOSRCBONES];
                             BuildRawTransforms(panim->source, pAnimationName,
                                                pRule->contact + panim->startframe - pSourceAnim->startframe,
-                                               panim->scale, panim->adjust, panim->rotation, panim->flags,
+                                               panim->ignorescale ? panim->scale / g_defaultscale : panim->scale,
+                                               panim->adjust, panim->rotation, panim->flags,
                                                srcBoneToWorld);
                             TranslateAnimations(panim->source, srcBoneToWorld, boneToWorld);
                         } else {

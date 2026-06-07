@@ -884,12 +884,23 @@ s_source_t *Load_Source(const char *name, const char *ext, bool reverse, bool is
             std::make_pair("obj", Load_OBJ),
             std::make_pair("xml", Load_DMX)
     };
-    for (int fmt_id = 0; fmt_id < supported_formats.size(); ++fmt_id) {
-        if ((!result && xext[0] == '\0') || std::strcmp(xext, supported_formats[fmt_id].first) == 0) {
-            std::snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.%s", cddir[numdirs], pTempName,
-                          supported_formats[fmt_id].first);
-            std::strncpy(pSource->filename, g_StudioMdlContext.szFilename, sizeof(pSource->filename));
-            result = (supported_formats[fmt_id].second)(pSource);
+    // build list of directories to search: primary first, then $addsearchdir fallbacks
+    int numSearchDirs = 1 + g_numAddSearchDirs;
+    const char **searchDirs = (const char **)stackalloc(numSearchDirs * sizeof(const char *));
+    searchDirs[0] = cddir[numdirs];
+    for (int sd = 0; sd < g_numAddSearchDirs; sd++)
+        searchDirs[1 + sd] = g_addSearchDirs[sd];
+
+    for (int sd = 0; sd < numSearchDirs && !result; sd++) {
+        for (int fmt_id = 0; fmt_id < (int)supported_formats.size(); ++fmt_id) {
+            if ((!result && xext[0] == '\0') || std::strcmp(xext, supported_formats[fmt_id].first) == 0) {
+                std::snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.%s", searchDirs[sd], pTempName,
+                              supported_formats[fmt_id].first);
+                std::strncpy(pSource->filename, g_StudioMdlContext.szFilename, sizeof(pSource->filename));
+                result = (supported_formats[fmt_id].second)(pSource);
+                if (result)
+                    break;
+            }
         }
     }
 
@@ -1320,7 +1331,7 @@ void Grab_Vertexanimation(s_source_t *psource, const char *pAnimName) {
             }
 
             tmpvanim[count].vertex = index;
-            VectorCopy(pos, tmpvanim[count].pos);
+            VectorScale(pos, g_currentscale, tmpvanim[count].pos);
             VectorCopy(normal, tmpvanim[count].normal);
             count++;
 

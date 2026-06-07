@@ -2984,6 +2984,9 @@ public:
     virtual bool Update(CDmElement **ppRoot, int nSourceVersion) {
         if (!ppRoot || !*ppRoot) return false;
         if (nSourceVersion > GetCurrentVersion()) return false;
+        if (nSourceVersion < GetCurrentVersion())
+            Warning( "DMX model format version %d is outdated (current is %d); upgrading automatically.\n",
+                     nSourceVersion, GetCurrentVersion() );
         int nUpdater = MAX(0, nSourceVersion - 1);
         bool bParity = true;
         while (MovieObjectsUpdateFunctionList[nUpdater]) {

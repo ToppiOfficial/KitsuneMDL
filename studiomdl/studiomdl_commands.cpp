@@ -335,6 +335,26 @@ void Cmd_AddSearchDir() {
         printf("New search path: %s\n", token);
     }
     CmdLib_AddNewSearchPath(token);
+
+    if (g_numAddSearchDirs >= ARRAYSIZE(g_addSearchDirs)) {
+        MdlWarning("$addsearchdir: max search dirs (%d) reached, ignoring for source loader\n", (int)ARRAYSIZE(g_addSearchDirs));
+        return;
+    }
+
+    char path[MAX_PATH];
+    if (Q_IsAbsolutePath(token)) {
+        Q_strncpy(path, token, sizeof(path));
+    } else {
+        Q_snprintf(path, sizeof(path), "%s%s", cddir[0], token);
+    }
+
+    int len = strlen(path);
+    if (len > 0 && path[len - 1] != '/' && path[len - 1] != '\\') {
+        Q_strncat(path, "/", sizeof(path), COPY_ALL_CHARACTERS);
+    }
+    Q_FixSlashes(path);
+
+    Q_strncpy(g_addSearchDirs[g_numAddSearchDirs++], path, MAX_PATH);
 }
 
 //-----------------------------------------------------------------------------
@@ -886,15 +906,15 @@ void Option_Eyeball(s_model_t *pmodel) {
 
     // X
     GetToken(false);
-    tmp[0] = verify_atof(token);
+    tmp[0] = verify_atof(token) * g_currentscale;
 
     // Y
     GetToken(false);
-    tmp[1] = verify_atof(token);
+    tmp[1] = verify_atof(token) * g_currentscale;
 
     // Z
     GetToken(false);
-    tmp[2] = verify_atof(token);
+    tmp[2] = verify_atof(token) * g_currentscale;
 
     // mesh material
     GetToken(false);
@@ -903,7 +923,7 @@ void Option_Eyeball(s_model_t *pmodel) {
 
     // diameter
     GetToken(false);
-    eyeball->radius = verify_atof(token) / 2.0;
+    eyeball->radius = verify_atof(token) / 2.0 * g_currentscale;
 
     // Z angle offset
     GetToken(false);
@@ -1206,7 +1226,7 @@ void Option_DmxEyelid(int imodel) {
 
                 // target
                 GetToken(false);
-                eyelidData[i].m_flTarget = verify_atof(token);
+                eyelidData[i].m_flTarget = verify_atof(token) * g_currentscale;
 
                 break;
             }
@@ -2163,21 +2183,21 @@ void Option_Eyelid(int imodel) {
             GetToken(false);
             lowererframe = verify_atoi(token);
             GetToken(false);
-            lowerertarget = verify_atof(token);
+            lowerertarget = verify_atof(token) * g_currentscale;
             lowererdesc = g_numflexdesc;
             strcpyn(g_flexdesc[g_numflexdesc++].FACS, localdesc);
         } else if (stricmp(token, "neutral") == 0) {
             GetToken(false);
             neutralframe = verify_atoi(token);
             GetToken(false);
-            neutraltarget = verify_atof(token);
+            neutraltarget = verify_atof(token) * g_currentscale;
             neutraldesc = g_numflexdesc;
             strcpyn(g_flexdesc[g_numflexdesc++].FACS, localdesc);
         } else if (stricmp(token, "raiser") == 0) {
             GetToken(false);
             raiserframe = verify_atoi(token);
             GetToken(false);
-            raisertarget = verify_atof(token);
+            raisertarget = verify_atof(token) * g_currentscale;
             raiserdesc = g_numflexdesc;
             strcpyn(g_flexdesc[g_numflexdesc++].FACS, localdesc);
         } else if (stricmp(token, "split") == 0) {
@@ -3100,55 +3120,41 @@ void Cmd_Skiptransition() {
 //-----------------------------------------------------------------------------
 // Checks to see if the model source was already loaded
 //-----------------------------------------------------------------------------
-s_source_t *FindCachedSource(const char *name, const char *xext) {
+static s_source_t *FindCachedSourceInDir(const char *dir, const char *name, const char *xext) {
     int i;
     if (xext[0]) {
-        // we know what extension is necessary. . look for it.
-        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.%s", cddir[numdirs], name, xext);
+        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.%s", dir, name, xext);
         for (i = 0; i < g_numsources; i++) {
             if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
                 return g_source[i];
         }
     } else {
-        // we don't know what extension to use, so look for all of 'em.
-        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.vrm", cddir[numdirs], name);
-        for (i = 0; i < g_numsources; i++) {
-            if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
-                return g_source[i];
+        static const char *s_exts[] = { "vrm", "dmx", "smd", "xml", "obj" };
+        for (int e = 0; e < ARRAYSIZE(s_exts); e++) {
+            Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.%s", dir, name, s_exts[e]);
+            for (i = 0; i < g_numsources; i++) {
+                if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
+                    return g_source[i];
+            }
         }
-        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.dmx", cddir[numdirs], name);
-        for (i = 0; i < g_numsources; i++) {
-            if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
-                return g_source[i];
-        }
-        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.smd", cddir[numdirs], name);
-        for (i = 0; i < g_numsources; i++) {
-            if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
-                return g_source[i];
-        }
+    }
+    return nullptr;
+}
 
-        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.xml", cddir[numdirs], name);
-        for (i = 0; i < g_numsources; i++) {
-            if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
-                return g_source[i];
-        }
-        Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.obj", cddir[numdirs], name);
-        for (i = 0; i < g_numsources; i++) {
-            if (!Q_stricmp(g_StudioMdlContext.szFilename, g_source[i]->filename))
-                return g_source[i];
-        }
-        /*
-		sprintf (g_szFilename, "%s%s.vta", cddir[numdirs], name );
-		for (i = 0; i < g_numsources; i++)
-		{
-			if (stricmp( g_szFilename, g_source[i]->filename ) == 0)
-				return g_source[i];
-		}
-		*/
+s_source_t *FindCachedSource(const char *name, const char *xext) {
+    // primary: current pushd/popd directory
+    s_source_t *pFound = FindCachedSourceInDir(cddir[numdirs], name, xext);
+    if (pFound)
+        return pFound;
+
+    // fallback: $addsearchdir directories (last resort)
+    for (int d = 0; d < g_numAddSearchDirs; d++) {
+        pFound = FindCachedSourceInDir(g_addSearchDirs[d], name, xext);
+        if (pFound)
+            return pFound;
     }
 
-    // Not found
-    return 0;
+    return nullptr;
 }
 
 
@@ -3861,7 +3867,7 @@ void Grab_AxisInterpBones() {
             int j;
             i = sscanf(g_StudioMdlContext.szLine, "axis %d %f %f %f %f %f %f", &j, &pos[0], &pos[1], &pos[2], &rot[2], &rot[0], &rot[1]);
             if (i == 7) {
-                VectorAdd(basepos, pos, pAxis->pos[j]);
+                pAxis->pos[j] = (basepos + pos) * g_currentscale;
                 AngleQuaternion(rot, pAxis->quat[j]);
             }
         }
@@ -5618,6 +5624,16 @@ void Cmd_Cmdlist() {
 // Purpose: parse order independant s_animation_t token for $animations
 //-----------------------------------------------------------------------------
 bool ParseAnimationToken(s_animation_t *panim) {
+    if (!Q_stricmp("nocull", token)) {
+        panim->nocull = true;
+        return true;
+    }
+
+    if (!Q_stricmp("ignorescale", token)) {
+        panim->ignorescale = true;
+        return true;
+    }
+
     if (!Q_stricmp("if", token)) {
         // fixme: add expression evaluation
         GetToken(false);
@@ -5892,6 +5908,82 @@ int ParseAnimation(s_animation_t *panim, bool isAppend) {
     return 0;
 }
 
+
+//-----------------------------------------------------------------------------
+// Purpose: mark panim and all animations it transitively references as used
+//-----------------------------------------------------------------------------
+static void MarkAnimReferenced( s_animation_t *panim, bool *referenced )
+{
+    if ( !panim || referenced[panim->index] )
+        return;
+    referenced[panim->index] = true;
+
+    for ( int i = 0; i < panim->numcmds; i++ )
+    {
+        const s_animcmd_t &cmd = panim->cmds[i];
+        s_animation_t *ref = nullptr;
+        switch ( cmd.cmd )
+        {
+        case CMD_SUBTRACT:       ref = cmd.u.subtract.ref;   break;
+        case CMD_AO:             ref = cmd.u.ao.ref;          break;
+        case CMD_MATCH:          ref = cmd.u.match.ref;       break;
+        case CMD_MATCHBLEND:     ref = cmd.u.match.ref;       break;
+        case CMD_WORLDSPACEBLEND:ref = cmd.u.world.ref;       break;
+        case CMD_REFMOTION:      ref = cmd.u.motion.pRefAnim; break;
+        case CMD_APPENDANIM:     ref = cmd.u.appendanim.ref;  break;
+        default: break;
+        }
+        MarkAnimReferenced( ref, referenced );
+    }
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: remove $animations not referenced by any $sequence (unless nocull)
+//-----------------------------------------------------------------------------
+void CullUnreferencedAnimations()
+{
+    if ( !g_StudioMdlContext.cullAnims || g_numani == 0 )
+        return;
+
+    bool *referenced = (bool *) calloc( g_numani, sizeof(bool) );
+
+    for ( int i = 0; i < g_sequence.Count(); i++ )
+    {
+        s_sequence_t &seq = g_sequence[i];
+        for ( int j = 0; j < seq.groupsize[0]; j++ )
+            for ( int k = 0; k < seq.groupsize[1]; k++ )
+                if ( seq.panim.Count() > j && seq.panim[j].Count() > k )
+                    MarkAnimReferenced( seq.panim[j][k], referenced );
+        MarkAnimReferenced( seq.paramanim,    referenced );
+        MarkAnimReferenced( seq.paramcompanim, referenced );
+        MarkAnimReferenced( seq.paramcenter,  referenced );
+    }
+
+    int numCulled = 0;
+    int newCount  = 0;
+    for ( int i = 0; i < g_numani; i++ )
+    {
+        s_animation_t *panim = g_panimation[i];
+        if ( !referenced[i] && !panim->nocull )
+        {
+            if ( !g_StudioMdlContext.quiet )
+                printf( "Culling unreferenced animation \"%s\"\n", panim->name );
+            free( panim );
+            numCulled++;
+        }
+        else
+        {
+            panim->index = newCount;
+            g_panimation[newCount++] = panim;
+        }
+    }
+    g_numani = newCount;
+
+    free( referenced );
+
+    if ( !g_StudioMdlContext.quiet && numCulled > 0 )
+        printf( "Culled %d unreferenced animation(s).\n", numCulled );
+}
 
 //-----------------------------------------------------------------------------
 // Purpose: allocate an entry for $animation
@@ -6182,6 +6274,7 @@ int ParseSequence(s_sequence_t *pseq, bool isAppend) {
     s_animation_t *animations[64];
     int i, j, n;
     int numblends = 0;
+    bool seqIgnoreScale = false;
 
     if (isAppend) {
         animations[0] = pseq->panim[0][0];
@@ -6230,6 +6323,8 @@ int ParseSequence(s_sequence_t *pseq, bool isAppend) {
             Option_Activity(pseq);
         } else if (stricmp("snap", token) == 0) {
             pseq->flags |= STUDIO_SNAP;
+        } else if (stricmp("ignorescale", token) == 0) {
+            seqIgnoreScale = true;
         } else if (stricmp("blendwidth", token) == 0) {
             GetToken(false);
             pseq->groupsize[0] = verify_atoi(token);
@@ -6443,6 +6538,27 @@ int ParseSequence(s_sequence_t *pseq, bool isAppend) {
     }
 
     ProcessSequence(pseq, numblends, animations, isAppend);
+
+    if (seqIgnoreScale) {
+        for (int idx = 0; idx < numblends; idx++) {
+            if (animations[idx]) animations[idx]->ignorescale = true;
+        }
+        if (pseq->paramanim)     pseq->paramanim->ignorescale     = true;
+        if (pseq->paramcompanim) pseq->paramcompanim->ignorescale = true;
+        if (pseq->paramcenter)   pseq->paramcenter->ignorescale   = true;
+    } else {
+        bool bHasIgnore = false, bHasNormal = false;
+        for (int idx = 0; idx < numblends; idx++) {
+            if (animations[idx]) {
+                if (animations[idx]->ignorescale) bHasIgnore = true;
+                else bHasNormal = true;
+            }
+        }
+        if (bHasIgnore && bHasNormal)
+            MdlWarning("sequence \"%s\" blends animations with mixed ignorescale settings — scale mismatch at runtime\n",
+                       pseq->name);
+    }
+
     return 0;
 }
 
@@ -6759,7 +6875,7 @@ void Grab_QuatInterpBones() {
                     j = pAxis->numtriggers++;
                     pAxis->tolerance[j] = DEG2RAD(tolerance);
                     AngleQuaternion(trigger, pAxis->trigger[j]);
-                    VectorAdd(basepos, pos, pAxis->pos[j]);
+                    pAxis->pos[j] = (basepos + pos) * g_currentscale;
                     pAxis->quat[j] = q;
                 } else {
                     MdlError("Line %d: Unable to parse procedual <trigger> bone: %s", g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);

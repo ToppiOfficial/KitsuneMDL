@@ -1798,11 +1798,11 @@ static bool LoadEyelid(s_model_t *pModel, CDmeEyelid *pDmeEyelid) {
             };
 
     eyelidData[kLowerer].m_pSourceAnim = GetNewStyleSourceVertexAnim(pSource, pDmeEyelid->m_sLowererFlex.Get());
-    eyelidData[kLowerer].m_flTarget = pDmeEyelid->m_flLowererHeight.Get();
+    eyelidData[kLowerer].m_flTarget = pDmeEyelid->m_flLowererHeight.Get() * g_currentscale;
     eyelidData[kNeutral].m_pSourceAnim = GetNewStyleSourceVertexAnim(pSource, pDmeEyelid->m_sNeutralFlex.Get());
-    eyelidData[kNeutral].m_flTarget = pDmeEyelid->m_flNeutralHeight.Get();
+    eyelidData[kNeutral].m_flTarget = pDmeEyelid->m_flNeutralHeight.Get() * g_currentscale;
     eyelidData[kRaiser].m_pSourceAnim = GetNewStyleSourceVertexAnim(pSource, pDmeEyelid->m_sRaiserFlex.Get());
-    eyelidData[kRaiser].m_flTarget = pDmeEyelid->m_flRaiserHeight.Get();
+    eyelidData[kRaiser].m_flTarget = pDmeEyelid->m_flRaiserHeight.Get() * g_currentscale;
 
     // Add a flexdesc for <type>_right & <type>_left
     // Where <type> is "upper" or "lower"
@@ -1986,12 +1986,12 @@ static void LoadEyeballs(s_source_t *pSource, s_model_t *pModel, CDmrElementArra
         Q_strncpy(ps_eyeball_t->name, pDmeEyeball->GetName(), sizeof(ps_eyeball_t->name));
         ps_eyeball_t->bone = nFoundBoneIndex;
         ps_eyeball_t->mesh = nFoundMeshMatIndex;
-        ps_eyeball_t->radius = pDmeEyeball->m_flRadius.Get();
+        ps_eyeball_t->radius = pDmeEyeball->m_flRadius.Get() * g_currentscale;
         ps_eyeball_t->zoffset = tan(DEG2RAD(pDmeEyeball->m_flYawAngle.Get()));
         ps_eyeball_t->iris_scale = 1.0f / pDmeEyeball->m_flIrisScale;
 
         // translate eyeball into bone space
-        VectorITransform(pDmeEyeball->m_vPosition.Get(), pSource->boneToPose[ps_eyeball_t->bone], ps_eyeball_t->org);
+        VectorITransform(pDmeEyeball->m_vPosition.Get() * g_currentscale, pSource->boneToPose[ps_eyeball_t->bone], ps_eyeball_t->org);
 
         VectorIRotate(Vector(0, 0, 1), mDefRot, vTmp);
         VectorIRotate(vTmp, pSource->boneToPose[ps_eyeball_t->bone], ps_eyeball_t->up);

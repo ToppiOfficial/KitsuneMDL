@@ -1137,7 +1137,7 @@ static void CCmd_JointSkip( CJointedModel &joints, const char *pName )
 }
 
 static void CCmd_TotalMass( CJointedModel &joints, const char *pMass )       { joints.SetTotalMass( Safe_atof(pMass) ); }
-static void CCmd_JointRoot( CJointedModel &joints, const char *pBone )       { strcpy( joints.m_rootName, pBone ); }
+static void CCmd_JointRoot( CJointedModel &joints, const char *pBone )       { strcpy( joints.m_rootName, RenameBone( pBone ) ); }
 static void CCmd_JointMerge( CJointedModel &joints, const char *pParent, const char *pChild )
 {
 	joints.AddMergeCommand( pParent, pChild );
@@ -1797,7 +1797,7 @@ void CollisionModel_Write( long checkSum )
 	for ( int k = 0; k < g_JointedModel.m_mergeList.Count(); k++ )
 	{
 		char buf[512];
-		Q_snprintf( buf, sizeof(buf), "%s,%s", g_JointedModel.m_mergeList[k].pParent, g_JointedModel.m_mergeList[k].pChild );
+		Q_snprintf( buf, sizeof(buf), "%s,%s", RenameBone( g_JointedModel.m_mergeList[k].pParent ), RenameBone( g_JointedModel.m_mergeList[k].pChild ) );
 		KeyWriteString( fp, "jointmerge", buf );
 	}
 	fprintf( fp, "}\n" );

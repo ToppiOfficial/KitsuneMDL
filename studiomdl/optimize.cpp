@@ -1120,7 +1120,7 @@ namespace OptimizedModel {
     // Try to reduce the number of bones affecting this vert so hardware can deal
     //-----------------------------------------------------------------------------
 
-#define MIN_BONE_INFLUENCE 1.0f
+#define MIN_BONE_INFLUENCE 0.0001f
 
     static void TryToReduceBoneInfluence(Vertex_t &stripGroupVert,
                                          mstudioboneweight_t const &boneWeights, int maxBones) {
@@ -4167,7 +4167,7 @@ namespace OptimizedModel {
         strcat(filename, g_outname);
         Q_StripExtension(filename, filename, sizeof(filename));
 
-        if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild) {
+        if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80) {
             strcpy(tmpFileName, filename);
             strcat(tmpFileName, ".sw.vtx");
             strcpy(glViewFilename, filename);
@@ -4184,7 +4184,7 @@ namespace OptimizedModel {
                                                    tmpFileName, glViewFilename);
         }
 
-        if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild) {
+        if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80) {
             strcpy(tmpFileName, filename);
             strcat(tmpFileName, ".dx80.vtx");
             strcpy(glViewFilename, filename);
