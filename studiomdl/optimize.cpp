@@ -2497,13 +2497,13 @@ namespace OptimizedModel {
                         mstudiomesh_t *pStudioMesh = pStudioModel->pMesh(meshID);
                         for (int stripGroupID = 0; stripGroupID < mesh->numStripGroups; stripGroupID++) {
                             // Only do this to HW-skinned meshes
-                            StripGroupHeader_t *pStripGroup = mesh->pStripGroup(stripGroupID);
+                            StripGroupHeader_t *pStripGroup = GetStripGroup(mesh, stripGroupID);
                             if (!(pStripGroup->flags & STRIPGROUP_IS_HWSKINNED)) {
                                 continue;
                             }
                             for (int stripID = 0; stripID < pStripGroup->numStrips; stripID++) {
                                 //						printf( "UPDATING BONE STATE\n" );
-                                StripHeader_t *pStrip = pStripGroup->pStrip(stripID);
+                                StripHeader_t *pStrip = GetStrip(pStripGroup, stripID);
 
                                 // Generate mapping back and forth between hardware IDs and original bone IDs
                                 int boneStateChangeID;
@@ -2626,7 +2626,8 @@ namespace OptimizedModel {
         MeshHeader_t mesh;
         mesh.numStripGroups = IsChar(pMesh->stripGroups.Count());
         int meshFileOffset = m_MeshesOffset + meshID * sizeof(MeshHeader_t);
-        int stripGroupFileOffset = m_StripGroupsOffset + stripGroupID * sizeof(StripGroupHeader_t);
+        int stripGroupStride = g_bLegacyVTX ? (int)sizeof(LegacyStripGroupHeader_t) : (int)sizeof(StripGroupHeader_t);
+        int stripGroupFileOffset = m_StripGroupsOffset + stripGroupID * stripGroupStride;
         mesh.stripGroupHeaderOffset = stripGroupFileOffset - meshFileOffset;
         mesh.flags = pMesh->flags;
         m_FileBuffer->WriteAt(meshFileOffset, &mesh, sizeof(MeshHeader_t), "mesh");
@@ -2638,6 +2639,19 @@ namespace OptimizedModel {
 
     void COptimizedModel::WriteStripGroup(int stripGroupID, StripGroup_t *pStripGroup,
                                           int vertID, int indexID, int topologyID, int stripID) {
+        if (g_bLegacyVTX) {
+            LegacyStripGroupHeader_t sg = {};
+            sg.numVerts   = pStripGroup->verts.Count();
+            sg.numIndices = pStripGroup->indices.Count();
+            sg.numStrips  = pStripGroup->strips.Count();
+            sg.flags      = IsByte(pStripGroup->flags);
+            int sgFileOffset = m_StripGroupsOffset + stripGroupID * sizeof(LegacyStripGroupHeader_t);
+            sg.vertOffset  = (m_VertsOffset   + vertID  * sizeof(Vertex_t))                    - sgFileOffset;
+            sg.indexOffset = (m_IndicesOffset  + indexID * sizeof(unsigned short))              - sgFileOffset;
+            sg.stripOffset = (m_StripsOffset   + stripID * sizeof(LegacyStripHeader_t))         - sgFileOffset;
+            m_FileBuffer->WriteAt(sgFileOffset, &sg, sizeof(LegacyStripGroupHeader_t), "strip group");
+            return;
+        }
         StripGroupHeader_t stripGroup;
         stripGroup.numVerts = pStripGroup->verts.Count();
         stripGroup.numIndices = pStripGroup->indices.Count();
@@ -2682,8 +2696,7 @@ namespace OptimizedModel {
 
 
     int COptimizedModel::WriteTopology(int topologyID, StripGroup_t *pStripGroup) {
-        // If we didnt' generate topology data, there won't be any topology indices
-        if (pStripGroup->topologyIndices.Count() == 0)
+        if (g_bLegacyVTX || pStripGroup->topologyIndices.Count() == 0)
             return 0;
 
         int topologyIndexFileOffset = m_TopologyOffset + topologyID * sizeof(unsigned short);
@@ -2696,6 +2709,20 @@ namespace OptimizedModel {
 
     void
     COptimizedModel::WriteStrip(int stripID, Strip_t *pStrip, int indexID, int curTopology, int vertID, int boneID) {
+        if (g_bLegacyVTX) {
+            LegacyStripHeader_t sh = {};
+            sh.numIndices          = pStrip->numStripGroupIndices;
+            sh.indexOffset         = pStrip->stripGroupIndexOffset;
+            sh.numVerts            = pStrip->numStripGroupVerts;
+            sh.vertOffset          = pStrip->stripGroupVertexOffset;
+            sh.numBones            = IsShort(pStrip->numBones);
+            sh.flags               = IsByte(pStrip->flags);
+            sh.numBoneStateChanges = pStrip->numBoneStateChanges;
+            int stripFileOffset    = m_StripsOffset + stripID * sizeof(LegacyStripHeader_t);
+            sh.boneStateChangeOffset = IsInt24((m_BoneStateChangesOffset + boneID * sizeof(BoneStateChangeHeader_t)) - stripFileOffset);
+            m_FileBuffer->WriteAt(stripFileOffset, &sh, sizeof(LegacyStripHeader_t), "strip");
+            return;
+        }
         StripHeader_t stripHeader;
 
         stripHeader.numIndices = pStrip->numStripGroupIndices;
@@ -2867,8 +2894,13 @@ namespace OptimizedModel {
         m_ModelLODsOffset = m_ModelsOffset + sizeof(ModelHeader_t) * stats.m_TotalModels;
         m_MeshesOffset = m_ModelLODsOffset + sizeof(ModelLODHeader_t) * stats.m_TotalModelLODs;
         m_StripGroupsOffset = m_MeshesOffset + sizeof(MeshHeader_t) * stats.m_TotalMeshes;
-        m_StripsOffset = m_StripGroupsOffset + sizeof(StripGroupHeader_t) * stats.m_TotalStripGroups;
-        m_VertsOffset = m_StripsOffset + sizeof(StripHeader_t) * stats.m_TotalStrips;
+        if (g_bLegacyVTX) {
+            m_StripsOffset = m_StripGroupsOffset + sizeof(LegacyStripGroupHeader_t) * stats.m_TotalStripGroups;
+            m_VertsOffset  = m_StripsOffset      + sizeof(LegacyStripHeader_t)      * stats.m_TotalStrips;
+        } else {
+            m_StripsOffset = m_StripGroupsOffset + sizeof(StripGroupHeader_t) * stats.m_TotalStripGroups;
+            m_VertsOffset  = m_StripsOffset      + sizeof(StripHeader_t)      * stats.m_TotalStrips;
+        }
         m_IndicesOffset = m_VertsOffset + sizeof(Vertex_t) * stats.m_TotalVerts;
         m_BoneStateChangesOffset = m_IndicesOffset + sizeof(unsigned short) * stats.m_TotalIndices;
         m_StringTableOffset =
@@ -2878,7 +2910,9 @@ namespace OptimizedModel {
                 m_MaterialReplacementsOffset + stats.m_TotalMaterialReplacements * sizeof(MaterialReplacementHeader_t);
         m_TopologyOffset =
                 m_MaterialReplacementsListOffset + g_ScriptLODs.Count() * sizeof(MaterialReplacementListHeader_t);
-        m_EndOfFileOffset = m_TopologyOffset + sizeof(unsigned short) * stats.m_TotalTopologyIndices;
+        m_EndOfFileOffset = g_bLegacyVTX
+            ? m_TopologyOffset
+            : m_TopologyOffset + sizeof(unsigned short) * stats.m_TotalTopologyIndices;
 
         int curModel = 0;
         int curLOD = 0;
@@ -2976,14 +3010,18 @@ namespace OptimizedModel {
         MapGlobalBonesToHardwareBoneIDsAndSortBones(pHdr);
 
         //	DebugCompareVerts( phdr );
-        SanityCheckAgainstStudioHDR(pHdr);
+        if (!g_bLegacyVTX) {
+            SanityCheckAgainstStudioHDR(pHdr);
+        }
 
         if (!g_StudioMdlContext.quiet) {
             OutputMemoryUsage();
         }
 
-        RemoveRedundantBoneStateChanges();
-        if (g_staticprop) {
+        if (!g_bLegacyVTX) {
+            RemoveRedundantBoneStateChanges();
+        }
+        if (g_staticprop && !g_bLegacyVTX) {
             ZeroNumBones();
         }
 
@@ -2994,8 +3032,10 @@ namespace OptimizedModel {
 
         m_FileBuffer->WriteToFile(pFileName, m_EndOfFileOffset);
 
-        FileHeader_t *pVtxHeader = (FileHeader_t *) m_FileBuffer->GetPointer(0);
-        SanityCheckVertexBoneLODFlags(pHdr, pVtxHeader);
+        if (!g_bLegacyVTX) {
+            FileHeader_t *pVtxHeader = (FileHeader_t *) m_FileBuffer->GetPointer(0);
+            SanityCheckVertexBoneLODFlags(pHdr, pVtxHeader);
+        }
     }
 
 

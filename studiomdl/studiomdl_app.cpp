@@ -678,6 +678,7 @@ void UsageAndExit() {
              "[-basedir]\n"
              "[-tempcontent]\n"
              "[-nop4]\n"
+             "[-newvtx] - write Alien Swarm/CS:GO VTX format (default is TF2/L4D2 compatible)\n"
     );
 }
 
@@ -924,6 +925,7 @@ bool CStudioMDLApp::ParseArguments() {
 
     g_staticprop = false;
     g_centerstaticprop = false;
+    g_bLegacyVTX = !CommandLine()->CheckParm("-newvtx");
 
     g_realignbones = false;
     g_constdirectionalightdot = 0;

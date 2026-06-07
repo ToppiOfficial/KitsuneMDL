@@ -19,6 +19,7 @@
 #define OPTIMIZED_MODEL_FILE_VERSION 7
 
 extern bool g_bDumpGLViewFiles;
+extern bool g_bLegacyVTX;
 
 struct s_bodypart_t;
 
@@ -205,9 +206,36 @@ struct MaterialReplacementListHeader_t
 	int replacementOffset;
 	inline MaterialReplacementHeader_t *pMaterialReplacement( int i ) const
 	{
-		MaterialReplacementHeader_t *pDebug = ( MaterialReplacementHeader_t *)(((byte *)this) + replacementOffset) + i; 
+		MaterialReplacementHeader_t *pDebug = ( MaterialReplacementHeader_t *)(((byte *)this) + replacementOffset) + i;
 		return pDebug;
 	}
+};
+
+// Legacy structs for TF2/L4D2 compatibility — identical to the above but without
+// the numTopologyIndices/topologyOffset fields added in the Alien Swarm branch.
+struct LegacyStripHeader_t
+{
+	int numIndices;
+	int indexOffset;
+	int numVerts;
+	int vertOffset;
+	short numBones;
+	unsigned char flags;
+	int numBoneStateChanges;
+	int boneStateChangeOffset;
+	// 27 bytes total with #pragma pack(1)
+};
+
+struct LegacyStripGroupHeader_t
+{
+	int numVerts;
+	int vertOffset;
+	int numIndices;
+	int indexOffset;
+	int numStrips;
+	int stripOffset;
+	unsigned char flags;
+	// 25 bytes total with #pragma pack(1)
 };
 
 struct FileHeader_t
@@ -245,6 +273,20 @@ struct FileHeader_t
 };
 
 #pragma pack()
+
+// Stride-aware strip-group / strip accessors. Use these whenever navigating an
+// on-disk or in-memory VTX buffer so that both legacy (TF2/L4D2, 25/27-byte)
+// and full (Alien Swarm+, 33/35-byte) layouts are handled with the right stride.
+inline StripGroupHeader_t *GetStripGroup(MeshHeader_t *pMesh, int i) {
+    if (g_bLegacyVTX)
+        return (StripGroupHeader_t *)((byte *)pMesh + pMesh->stripGroupHeaderOffset + i * (int)sizeof(LegacyStripGroupHeader_t));
+    return pMesh->pStripGroup(i);
+}
+inline StripHeader_t *GetStrip(StripGroupHeader_t *pStripGroup, int i) {
+    if (g_bLegacyVTX)
+        return (StripHeader_t *)((byte *)pStripGroup + pStripGroup->stripOffset + i * (int)sizeof(LegacyStripHeader_t));
+    return pStripGroup->pStrip(i);
+}
 
 void WriteOptimizedFiles( studiohdr_t *phdr, s_bodypart_t *pSrcBodyParts );
 

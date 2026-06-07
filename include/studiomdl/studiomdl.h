@@ -118,6 +118,7 @@ EXTERN    bool g_bboxonlyverts;
 EXTERN    int clip_texcoords;
 EXTERN    bool g_staticprop;
 EXTERN    bool g_centerstaticprop;
+EXTERN    bool g_bLegacyVTX;
 
 EXTERN    bool g_realignbones;
 EXTERN    bool g_definebones;

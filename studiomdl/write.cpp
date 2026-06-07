@@ -3605,7 +3605,7 @@ bool BuildSortedVertexList(const studiohdr_t *pStudioHdr, const void *pVtxBuff, 
                     pMeshHdr = pModelLODHdr->pMesh(k);
                     pStudioMesh = pStudioModel->pMesh(k);
                     for (m = 0; m < pMeshHdr->numStripGroups; m++) {
-                        pStripGroupHdr = pMeshHdr->pStripGroup(m);
+                        pStripGroupHdr = OptimizedModel::GetStripGroup(pMeshHdr, m);
 
                         // sanity check the indexes have 100% coverage of the vertexes
                         pVertexes = (int *) malloc(pStripGroupHdr->numVerts * sizeof(int));
@@ -4082,7 +4082,7 @@ FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPo
 
                     pMeshHdr = pModelLODHdr->pMesh(k);
                     for (m = 0; m < pMeshHdr->numStripGroups; m++) {
-                        pStripGroupHdr = pMeshHdr->pStripGroup(m);
+                        pStripGroupHdr = OptimizedModel::GetStripGroup(pMeshHdr, m);
 
                         for (n = 0; n < pStripGroupHdr->numVerts; n++) {
                             pStripVertex = pStripGroupHdr->pVertex(n);
@@ -4543,13 +4543,13 @@ bool Clamp_VTX_LODS(const char *fileName, int rootLOD, studiohdr_t *pStudioHdr) 
                     pNewVtxMesh->numStripGroups = pVtxMesh->numStripGroups;
                     pNewVtxMesh->flags = pVtxMesh->flags;
                     pNewVtxMesh->stripGroupHeaderOffset = (pData - (byte *) pNewVtxMesh);
-                    pData += pNewVtxMesh->numStripGroups * sizeof(OptimizedModel::StripGroupHeader_t);
+                    pData += pNewVtxMesh->numStripGroups * (g_bLegacyVTX ? (int)sizeof(OptimizedModel::LegacyStripGroupHeader_t) : (int)sizeof(OptimizedModel::StripGroupHeader_t));
 
                     // printf("part %d : model %d : lod %d : mesh %d : strips %d : offset %d\n", i, j, nLodID, k, pVtxMesh->numStripGroups, pVtxMesh->stripGroupHeaderOffset );
 
                     for (m = 0; m < pVtxMesh->numStripGroups; m++) {
-                        OptimizedModel::StripGroupHeader_t *pStripGroup = pVtxMesh->pStripGroup(m);
-                        OptimizedModel::StripGroupHeader_t *pNewStripGroup = pNewVtxMesh->pStripGroup(m);
+                        OptimizedModel::StripGroupHeader_t *pStripGroup = OptimizedModel::GetStripGroup(pVtxMesh, m);
+                        OptimizedModel::StripGroupHeader_t *pNewStripGroup = OptimizedModel::GetStripGroup(pNewVtxMesh, m);
 
                         // int delta = ((byte *)pStripGroup - (byte *)pVtxHdr) - ((byte *)pNewStripGroup - (byte *)pNewVtxHdr);
 
@@ -4567,7 +4567,7 @@ bool Clamp_VTX_LODS(const char *fileName, int rootLOD, studiohdr_t *pStudioHdr) 
 
                         pNewStripGroup->numStrips = pStripGroup->numStrips;
                         pNewStripGroup->stripOffset = (pData - (byte *) pNewStripGroup);
-                        size = pNewStripGroup->numStrips * sizeof(OptimizedModel::StripHeader_t);
+                        size = pNewStripGroup->numStrips * (g_bLegacyVTX ? (int)sizeof(OptimizedModel::LegacyStripHeader_t) : (int)sizeof(OptimizedModel::StripHeader_t));
                         pData += size;
 
                         pNewStripGroup->flags = pStripGroup->flags;
@@ -4579,8 +4579,8 @@ bool Clamp_VTX_LODS(const char *fileName, int rootLOD, studiohdr_t *pStudioHdr) 
 						*/
 
                         for (n = 0; n < pStripGroup->numStrips; n++) {
-                            OptimizedModel::StripHeader_t *pStrip = pStripGroup->pStrip(n);
-                            OptimizedModel::StripHeader_t *pNewStrip = pNewStripGroup->pStrip(n);
+                            OptimizedModel::StripHeader_t *pStrip = OptimizedModel::GetStrip(pStripGroup, n);
+                            OptimizedModel::StripHeader_t *pNewStrip = OptimizedModel::GetStrip(pNewStripGroup, n);
 
                             pNewStrip->numIndices = pStrip->numIndices;
                             pNewStrip->indexOffset = pStrip->indexOffset;
