@@ -3387,7 +3387,7 @@ bool BoneIsProcedural(char const *pname) {
 bool BoneIsIK(char const *pname) {
     int k;
 
-    // tag bones used by ikchains 
+    // tag bones used by ikchains
     for (k = 0; k < g_numikchains; k++) {
         if (!stricmp(g_ikchain[k].bonename, pname)) {
             return true;
@@ -3397,17 +3397,40 @@ bool BoneIsIK(char const *pname) {
     return false;
 }
 
-bool BoneShouldCollapse(char const *pname) {
-    int k;
+static bool BoneIsFlexDriver(char const *pname) {
+    CDmeBoneFlexDriverList *pList = GetElement<CDmeBoneFlexDriverList>(g_StudioMdlContext.hDmeBoneFlexDriverList);
+    if (!pList) return false;
+    for (int i = 0; i < pList->m_eBoneFlexDriverList.Count(); ++i) {
+        CDmeBoneFlexDriver *p = pList->m_eBoneFlexDriverList[i];
+        if (p && !Q_stricmp(p->m_sBoneName.Get(), pname))
+            return true;
+    }
+    return false;
+}
 
-    for (k = 0; k < g_collapse.Count(); k++) {
+// Returns true if this bone is the control/input for an axisinterp or quatinterp procedural bone.
+static bool BoneIsProceduralControl(char const *pname) {
+    for (int k = 0; k < g_numaxisinterpbones; k++) {
+        if (!stricmp(g_axisinterpbones[k].controlname, pname))
+            return true;
+    }
+    for (int k = 0; k < g_numquatinterpbones; k++) {
+        if (!stricmp(g_quatinterpbones[k].controlname, pname))
+            return true;
+    }
+    return false;
+}
+
+bool BoneShouldCollapse(char const *pname) {
+    for (int k = 0; k < g_collapse.Count(); k++) {
         if (stricmp(g_collapse[k], pname) == 0) {
             return true;
         }
     }
 
-    return (!BoneHasAnimation(pname) && !BoneIsProcedural(pname) && !BoneIsIK(pname) && !BoneHasAttachments(pname) &&
-            !BoneIsBonemerge(pname));
+    return (!BoneHasAnimation(pname) && !BoneIsProcedural(pname) && !BoneIsProceduralControl(pname)
+            && !BoneIsIK(pname) && !BoneHasAttachments(pname) && !BoneIsBonemerge(pname)
+            && !BoneIsFlexDriver(pname));
 }
 
 //-----------------------------------------------------------------------------
@@ -3472,8 +3495,10 @@ void CollapseBones() {
             V_strcat_safe(szBoneReport, "] is unused.");
         }
 
-        // if it's being used by something other than a vertex, collapse it.
-        if (((g_bonetable[k].flags & BONE_USED_BY_VERTEX_MASK) != 0) || !BoneShouldCollapse(g_bonetable[k].name)) {
+        // Collapse if no special status prevents it. Vertex weights alone do not block
+        // collapse — weights transfer to the parent via MapSourcesToGlobalBonetable +
+        // RemapVerticesToGlobalBones after this function removes the bone.
+        if (!BoneShouldCollapse(g_bonetable[k].name)) {
             if (g_StudioMdlContext.collapse_bones_message) {
                 Msg("[%08x] [keeping]    %s \n", sBoneFlags, szBoneReport);
             }
@@ -3482,6 +3507,9 @@ void CollapseBones() {
 
         count++;
 
+        if (!g_StudioMdlContext.quiet) {
+            Msg("collapsing bone \"%s\"\n", g_bonetable[k].name);
+        }
         if (g_StudioMdlContext.collapse_bones_message) {
             Msg("[%08x] [collapsing] %s \n", sBoneFlags, szBoneReport);
         }
@@ -4070,13 +4098,8 @@ int BuildGlobalBonetable() {
         BuildRawTransforms(psource, pSourceAnim->animationname, 0, srcBoneToWorld);
 
         for (j = 0; j < psource->numbones; j++) {
-            if (g_StudioMdlContext.collapse_bones_aggressive) {
-                if (psource->boneflags[j] == 0)
-                    continue;
-            } else {
-                if (psource->boneref[j] == 0)
-                    continue;
-            }
+            if (psource->boneref[j] == 0)
+                continue;
 
             k = findGlobalBone(psource->localBone[j].name);
             if (k == -1) {
@@ -5242,7 +5265,7 @@ void RemapBones() {
         }
     }
 
-    if (g_StudioMdlContext.collapse_bones || g_numimportbones) {
+    if (!g_StudioMdlContext.no_collapse_bones) {
         CollapseBones();
     }
 

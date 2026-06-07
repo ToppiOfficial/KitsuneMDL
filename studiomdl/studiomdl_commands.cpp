@@ -4260,20 +4260,19 @@ void Cmd_ClipToTextures() {
 }
 
 void Cmd_CollapseBones() {
-    g_StudioMdlContext.collapse_bones = true;
+    // Bone collapse is now default-on. This command is kept as a no-op so
+    // existing QC files that contain $collapsebones do not produce errors.
+}
+
+void Cmd_NoCollapseBones() {
+    g_StudioMdlContext.no_collapse_bones = true;
 }
 
 void Cmd_SkinnedLODs() {
     g_bSkinnedLODs = true;
 }
 
-void Cmd_CollapseBonesAggressive() {
-    g_StudioMdlContext.collapse_bones = true;
-    g_StudioMdlContext.collapse_bones_aggressive = true;
-}
-
 void Cmd_AlwaysCollapse() {
-    g_StudioMdlContext.collapse_bones = true;
     GetToken(false);
     g_collapse.AddToTail(strdup(token));
 }
@@ -6890,7 +6889,7 @@ MDLCommand_t g_Commands[] =
                 {"$stripboneprefix",                 Cmd_StripBonePrefix,},
                 {"$renamebonesubstr",                Cmd_RenameBoneSubstr,},
                 {"$collapsebones",                   Cmd_CollapseBones,},
-                {"$collapsebonesaggressive",         Cmd_CollapseBonesAggressive,},
+                {"$nocollapsebones",                 Cmd_NoCollapseBones,},
                 {"$alwayscollapse",                  Cmd_AlwaysCollapse,},
                 {"$proceduralbones",                 Load_ProceduralBones,},
                 {"$skiptransition",                  Cmd_Skiptransition,},

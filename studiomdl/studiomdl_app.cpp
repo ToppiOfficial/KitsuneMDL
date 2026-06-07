@@ -994,6 +994,11 @@ bool CStudioMDLApp::ParseArguments() {
             continue;
         }
 
+        if (!Q_stricmp(pArgv, "-nocollapsebones")) {
+            g_StudioMdlContext.no_collapse_bones = true;
+            continue;
+        }
+
         if (!Q_stricmp(pArgv, "-quiet")) {
             g_StudioMdlContext.quiet = true;
             g_StudioMdlContext.verbose = false;

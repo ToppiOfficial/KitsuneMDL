@@ -1835,8 +1835,7 @@ void ProcessModelName(const char *pModelName);
 struct StudioMdlContext {
     unsigned parseable_completion_output: 1;
     unsigned collapse_bones_message: 1;
-    unsigned collapse_bones: 1;
-    unsigned collapse_bones_aggressive: 1;
+    unsigned no_collapse_bones: 1;
     unsigned quiet: 1;
     unsigned checkLengths: 1;
     unsigned printBones: 1;
@@ -1922,8 +1921,7 @@ struct StudioMdlContext {
     StudioMdlContext()
             : parseable_completion_output(0),
               collapse_bones_message(0),
-              collapse_bones(0),
-              collapse_bones_aggressive(0),
+              no_collapse_bones(0),
               quiet(0),
               checkLengths(0),
               printBones(0),
