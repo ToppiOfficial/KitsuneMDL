@@ -60,6 +60,8 @@ add_executable(studiomdl_v2
         studiomdl/studiomdl_commands.cpp
         studiomdl/studiomdl_errors.cpp
         studiomdl/studiomdl_app.cpp
+        studiomdl/collisionmodel.cpp
+        studiomdl/collisionmodelsource.cpp
         studiomdl/studiomdl_app.h
 )
 target_compile_definitions(studiomdl_v2 PRIVATE -DSTATIC_TIER0)
@@ -93,8 +95,9 @@ target_link_libraries(dmxconvert PRIVATE
         tier0
         tier1
         tier2
+        mathlib
         appframework
         datamodel
         dmserializers
-        mathlib
+        filesystem_stdio_v2_static
         )

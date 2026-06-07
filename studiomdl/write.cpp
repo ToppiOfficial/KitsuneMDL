@@ -32,6 +32,7 @@
 #include "studiomdl/perfstats.h"
 
 #include "tier1/smartptr.h"
+#include "studiomdl/collisionmodel.h"
 
 int totalframes = 0;
 float totalseconds = 0;
@@ -3322,6 +3323,8 @@ void WriteModelFiles() {
     if (spewFlags) {
         SpewPerfStats(phdr, filename, spewFlags);
     }
+
+    CollisionModel_Write( phdr->checksum );
 }
 
 const vertexFileHeader_t *mstudiomodel_t::CacheVertexData(void *pModelData) {

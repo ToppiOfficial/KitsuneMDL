@@ -20,6 +20,7 @@
 #include "dmserializers/idmserializers.h"
 #include "mdllib/mdllib.h"
 #include "filesystem/filesystem_stdio.h"
+#include "studiomdl/collisionmodel.h"
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -809,6 +810,8 @@ int CStudioMDLApp::Main() {
         ConsistencyCheckSurfaceProp();
         ConsistencyCheckContents();
         // ValidateSharedAnimationGroups();
+
+        CollisionModel_Build();
 
         WriteModelFiles();
     }

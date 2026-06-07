@@ -91,3 +91,6 @@ build.ninja
 # CLAUDE CODE
 CLAUDE.md
 .claude/
+
+# My own todo notes
+dev-notes/

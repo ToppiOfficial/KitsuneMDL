@@ -7,6 +7,7 @@
 #include "datamodel/idatamodel.h"
 #include "mdlobjects/dmeboneflexdriver.h"
 #include "common/scriplib.h"
+#include "studiomdl/collisionmodel.h"
 #include "studiomdl_errors.h"
 #include "movieobjects/movieobjects.h"
 #include "movieobjects/dmemdlmakefile.h"
@@ -4462,6 +4463,10 @@ void Cmd_CollisionPrecision() {
     g_StudioMdlContext.CollisionPrecision = verify_atof(token);
 }
 
+
+void Cmd_CollisionModel()  { DoCollisionModel(false); }
+void Cmd_CollisionJoints() { DoCollisionModel(true);  }
+
 void Cmd_ErrorOnSeqRemapFail() {
     g_StudioMdlContext.errorOnSeqRemapFail = true;
 }
@@ -6939,6 +6944,8 @@ MDLCommand_t g_Commands[] =
                 {"$defaultfadeout",                  Cmd_SetDefaultFadeOutTime,},
                 {"$allowactivityname",               Cmd_AllowActivityName,},
                 {"$collisionprecision",              Cmd_CollisionPrecision,},
+                {"$collisionmodel",                  Cmd_CollisionModel,},
+                {"$collisionjoints",                 Cmd_CollisionJoints,},
                 {"$erroronsequenceremappingfailure", Cmd_ErrorOnSeqRemapFail,},
                 {"$modelhasnosequences",             Cmd_SetModelIntentionallyHasZeroSequences,},
                 {"$contentrootrelative",             Cmd_ContentRootRelative,},
