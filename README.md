@@ -1,11 +1,8 @@
-# studiomdl_v2
+# KitsuneMDL (studiomdl_v2)
 
-> **Alpha / Experimental probably not useable, I am not a c++ developer so I have close to 0 clue what I am doing**
+> **Experimental**
 
 A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
-
-I'll likely rename the project.
-
 
 ## Requirements
 
@@ -18,19 +15,26 @@ I'll likely rename the project.
 
 `DMX model 18` but lower version can maybe still work
 
+## Features
 
-## Changes
-
-- Bone limit raised from 256 to 1024, texture limit from 32 to 64
+- 64 Bit
+- Increase some compile limit
+  - Bone limit 256 -> 1024 (Will warn if the model is above 256 as most engine branch are either 128 or 256)
+  - Texture limit 32 -> 64 (Still recommend to stay below 32 for all engine branch aside from Source Film Maker)
 - Replaced nvstrip with meshoptimizer
-- TF2/L4D2 compatible VTX output by default; use `-newvtx` for CS:GO/Alien Swarm/Source Film Maker format, `-nodx80` to skip dx80/sw
-- `-cullanims` flag to strip unreferenced `$animation` blocks
-- `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, and VTA flex deltas
-- New `ignorescale` parameter for `$animation` and `$sequence`
+- Minor code changes for faster compile
 - `$addsearchdir` now works correctly for SMD/DMX source file lookup
-- `$renamebone` now propagates to the collision model
-- Bone weight cull threshold reduced from 5% to 0.01%
-- Fixed crash with blank bodygroup + `$staticprop` (TODO: Test)
+- New `ignorescale` parameter for `$animation` and `$sequence`
+- New `$driverbone` and `driverlookat` to create procedural bone without the need for VRD files
+- New `$rendermesh` for DMX models containing multiple DMEMesh elements
+- Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch.
+- Can compile for DirectX8 and can be opted out with `-nodx80` similar to StudioMDL++
+- Recreated some features from StudioMDL++ and NekoMDL
+  - `-cullanims` flag to strip unreferenced `$animation` blocks
+  - Bone weight cull threshold reduced from 5% to 0.01%
+  - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, and VTA flex deltas
+  - `$renamebone` now propagates to the collision model
+  - Fixed crash with blank bodygroup + `$staticprop` (TODO: Test)
 
 ## Credits
 
