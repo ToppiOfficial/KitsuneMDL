@@ -1026,6 +1026,9 @@ struct s_source_t {
 EXTERN int g_numsources;
 EXTERN s_source_t *g_source[MAXSTUDIOSEQUENCES];
 
+EXTERN s_source_t *g_pStaticPropPoseSource;
+EXTERN int g_nStaticPropPoseFrame;
+
 struct s_eyeball_t {
     char name[MAXSTUDIONAME];
     int index;

@@ -3544,6 +3544,117 @@ void CollapseBones() {
 
 
 //-----------------------------------------------------------------------------
+// Purpose: skin all source vertices to the pose sampled from frame g_nStaticPropPoseFrame
+//          of g_pStaticPropPoseSource, baking it into the geometry before MakeStaticProp()
+//          collapses the skeleton.
+//-----------------------------------------------------------------------------
+static void ApplyStaticPropPose() {
+    // TODO: This still need some changes such as force collapsing to mimic $staticprop!
+
+    s_source_t *pPoseSource = g_pStaticPropPoseSource;
+
+    if (!pPoseSource || pPoseSource->m_Animations.Count() == 0) {
+        MdlWarning("$staticproppose: pose source has no animations, ignoring\n");
+        return;
+    }
+
+    s_sourceanim_t *pPoseAnim = &pPoseSource->m_Animations[0];
+    int frame = clamp(g_nStaticPropPoseFrame, 0, pPoseAnim->numframes - 1);
+
+    if (g_nStaticPropPoseFrame != frame) {
+        MdlWarning("$staticproppose: frame %d out of range [0, %d], clamped\n",
+                   g_nStaticPropPoseFrame, pPoseAnim->numframes - 1);
+    }
+
+    matrix3x4_t targetBoneToWorld[MAXSTUDIOSRCBONES];
+    BuildRawTransforms(pPoseSource, pPoseAnim->animationname, frame, targetBoneToWorld);
+
+    for (int i = 0; i < g_numsources; i++) {
+        s_source_t *psource = g_source[i];
+        if (psource->numvertices == 0)
+            continue;
+
+        // For each source bone, compute: skinMat = targetBoneToWorld[matchedPoseBone] * inverse(bindBoneToWorld)
+        // where bindBoneToWorld = psource->boneToPose[k] (bone-local -> bind pose world).
+        matrix3x4_t skinMat[MAXSTUDIOSRCBONES];
+        for (int k = 0; k < psource->numbones; k++) {
+            int poseIdx = -1;
+            for (int p = 0; p < pPoseSource->numbones; p++) {
+                if (!Q_stricmp(psource->localBone[k].name, pPoseSource->localBone[p].name)) {
+                    poseIdx = p;
+                    break;
+                }
+            }
+
+            if (poseIdx == -1) {
+                MdlWarning("$staticproppose: bone '%s' not in pose source, using bind pose\n",
+                           psource->localBone[k].name);
+                SetIdentityMatrix(skinMat[k]);
+                continue;
+            }
+
+            matrix3x4_t invBind;
+            MatrixInvert(psource->boneToPose[k], invBind);
+            ConcatTransforms(targetBoneToWorld[poseIdx], invBind, skinMat[k]);
+        }
+
+        for (int j = 0; j < psource->numvertices; j++) {
+            const s_boneweight_t &bw = psource->vertex[j].boneweight;
+            Vector newPos(0, 0, 0), newNormal(0, 0, 0), newTangentS(0, 0, 0);
+
+            for (int k = 0; k < bw.numbones; k++) {
+                float w = bw.weight[k];
+                const matrix3x4_t &m = skinMat[bw.bone[k]];
+                Vector tmp;
+
+                VectorTransform(psource->vertex[j].position, m, tmp);
+                VectorMA(newPos, w, tmp, newPos);
+
+                VectorRotate(psource->vertex[j].normal, m, tmp);
+                VectorMA(newNormal, w, tmp, newNormal);
+
+                VectorRotate(psource->vertex[j].tangentS.AsVector3D(), m, tmp);
+                VectorMA(newTangentS, w, tmp, newTangentS);
+            }
+
+            psource->vertex[j].position = newPos;
+            VectorNormalize(newNormal);
+            psource->vertex[j].normal = newNormal;
+
+            float tangentHandedness = psource->vertex[j].tangentS.w;
+            VectorNormalize(newTangentS);
+            VectorCopy(newTangentS, psource->vertex[j].tangentS.AsVector3D());
+            psource->vertex[j].tangentS.w = tangentHandedness;
+        }
+    }
+
+    // Rename root bone to "static_prop" and collapse the skeleton so all
+    // vertices are attached to a single root, matching $staticprop behaviour.
+    for (int i = 0; i < g_numsources; i++) {
+        s_source_t *psource = g_source[i];
+        if (psource->numvertices == 0)
+            continue;
+
+        strcpy(psource->localBone[0].name, "static_prop");
+        psource->localBone[0].parent = -1;
+        SetIdentityMatrix(psource->boneToPose[0]);
+
+        for (int k = 1; k < psource->numbones; k++) {
+            psource->localBone[k].parent = -1;
+        }
+
+        for (int j = 0; j < psource->numvertices; j++) {
+            for (int k = 0; k < psource->vertex[j].boneweight.numbones; k++) {
+                psource->vertex[j].boneweight.bone[k] = 0;
+            }
+        }
+    }
+
+    g_numattachments = 0;
+}
+
+
+//-----------------------------------------------------------------------------
 // Purpose: replace all animation, rotation and translation, etc. with a single bone
 //-----------------------------------------------------------------------------
 void MakeStaticProp() {
@@ -5296,6 +5407,10 @@ void RemoveDuplicateAttachments() {
 //-----------------------------------------------------------------------------
 void RemapBones() {
     int iError = 0;
+
+    if (g_pStaticPropPoseSource) {
+        ApplyStaticPropPose();
+    }
 
     if (g_staticprop) {
         MakeStaticProp();

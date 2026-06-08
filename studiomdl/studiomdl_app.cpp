@@ -917,6 +917,8 @@ bool CStudioMDLApp::ParseArguments() {
     g_staticprop = false;
     g_centerstaticprop = false;
     g_bLegacyVTX = !CommandLine()->CheckParm("-newvtx");
+    g_pStaticPropPoseSource = nullptr;
+    g_nStaticPropPoseFrame = 0;
 
     g_realignbones = false;
     g_constdirectionalightdot = 0;

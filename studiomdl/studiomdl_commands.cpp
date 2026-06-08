@@ -4329,7 +4329,29 @@ void ProcessStaticProp() {
 }
 
 void Cmd_StaticProp() {
+    if (g_pStaticPropPoseSource) {
+        MdlError("$staticprop cannot be used together with $staticproppose\n");
+        return;
+    }
     ProcessStaticProp();
+}
+
+void Cmd_StaticPropPose() {
+    if (g_staticprop) {
+        MdlError("$staticproppose cannot be used together with $staticprop\n");
+        return;
+    }
+
+    GetToken(false);
+    s_source_t *pSource = Load_Source(token, "", false, false);
+    if (!pSource) {
+        MdlError("$staticproppose: failed to load animation source '%s'\n", token);
+        return;
+    }
+
+    GetToken(false);
+    g_pStaticPropPoseSource = pSource;
+    g_nStaticPropPoseFrame = atoi(token);
 }
 
 void Cmd_ZBrush() {
@@ -7582,6 +7604,444 @@ void Cmd_DriverLookAt() {
         Msg("$driverlookat '%s': %d bone(s) registered\n", aimTargetName, numHelperBones);
 }
 
+static void Cmd_Elif()    { Error("$elif must immediately follow the closing '}' of a $if or $elif block\n"); }
+static void Cmd_Else()    { Error("$else must immediately follow the closing '}' of a $if or $elif block\n"); }
+static void Cmd_Case()    { Error("$case is only valid directly inside a $switch block\n"); }
+static void Cmd_Default() { Error("$default is only valid directly inside a $switch block\n"); }
+
+//-----------------------------------------------------------------------------
+// $deltaproportions
+//-----------------------------------------------------------------------------
+
+struct DP_AbsTransform {
+    Vector     pos;
+    Quaternion rot;
+};
+
+// Compute world-space transforms from local bone data.
+static void DP_BuildAbsTransforms(const s_source_t *src, const s_bone_t *bones,
+                                   CUtlVector<DP_AbsTransform> &out) {
+    int n = src->numbones;
+    out.SetCount(n);
+    for (int i = 0; i < n; i++) {
+        int par = src->localBone[i].parent;
+        Quaternion localRot;
+        AngleQuaternion(bones[i].rot, localRot);
+        if (par < 0) {
+            out[i].pos = bones[i].pos;
+            out[i].rot = localRot;
+        } else {
+            Vector rotated;
+            QuaternionMultiply(out[par].rot, bones[i].pos, rotated);
+            out[i].pos = out[par].pos + rotated;
+            QuaternionMult(out[par].rot, localRot, out[i].rot);
+        }
+    }
+}
+
+static CUtlString DP_CollectAnimBlock() {
+    GetToken(true);
+    if (token[0] != '{')
+        TokenError("$deltaproportions: expected '{' for qc block\n");
+
+    CUtlString buf;
+    int depth = 1;
+    while (GetToken(true)) {
+        if (token[0] == '{') {
+            depth++;
+            buf += "{ ";
+        } else if (token[0] == '}') {
+            depth--;
+            if (depth == 0) {
+                break;
+            }
+            buf += "} ";
+        } else {
+            // re-quote tokens that contain spaces (e.g. bone names with spaces)
+            if (strchr(token, ' ') || strchr(token, '\t')) {
+                buf += "\"";
+                buf += token;
+                buf += "\" ";
+            } else {
+                buf += token;
+                buf += " ";
+            }
+        }
+    }
+    return buf;
+}
+
+void PushMemoryScript(char *pszBuffer, const int nSize);
+bool PopMemoryScript();
+
+static void DP_ApplyAnimBlock(const char *animName, const CUtlString &block) {
+    if (!block.Length()) return;
+    s_animation_t *pa = LookupAnimation(animName);
+    if (!pa) return;
+
+    // PushMemoryScript requires a mutable buffer; make a copy
+    CUtlString mutableBuf = block;
+    PushMemoryScript(mutableBuf.Get(), mutableBuf.Length());
+    ParseAnimation(pa, false);
+    PopMemoryScript();
+}
+
+
+static void DP_RegisterInMemoryAnim(const char *animName,
+                                    const s_source_t *refSrc,
+                                    const CUtlVector<Vector> &lpos,
+                                    const CUtlVector<RadianEuler> &lrot,
+                                    const bool *pSkip = nullptr) {
+    if (g_numani >= MAXSTUDIOANIMS) {
+        MdlError("$deltaproportions: too many animations (max %d)\n", MAXSTUDIOANIMS);
+        return;
+    }
+    if (LookupAnimation(animName)) {
+        MdlWarning("$deltaproportions: animation '%s' already defined, skipping\n", animName);
+        return;
+    }
+
+    int nBones = refSrc->numbones;
+
+    // allocate source and register it so the pipeline can remap bones
+    s_source_t *pSrc = (s_source_t *)calloc(1, sizeof(s_source_t));
+    g_source[g_numsources++] = pSrc;
+    Q_snprintf(pSrc->filename, sizeof(pSrc->filename), "<deltaproportions:%s>", animName);
+    pSrc->numbones = nBones;
+    for (int i = 0; i < nBones; i++)
+        pSrc->localBone[i] = refSrc->localBone[i];
+
+    // single animation with one frame
+    int animIdx = pSrc->m_Animations.AddToTail();
+    s_sourceanim_t &sa = pSrc->m_Animations[animIdx];
+    Q_strncpy(sa.animationname, animName, sizeof(sa.animationname));
+    sa.numframes   = 1;
+    sa.startframe  = 0;
+    sa.endframe    = 0;
+
+    s_bone_t *frameBones = new s_bone_t[nBones]();  // zero-init; skipped bones stay at zero
+    for (int i = 0; i < nBones; i++) {
+        if (pSkip && pSkip[i]) continue;
+        frameBones[i].pos = lpos[i];
+        frameBones[i].rot = lrot[i];
+    }
+    sa.rawanim.AddToTail(frameBones);
+
+    // build boneToPose from frame 0 so the pipeline can resolve world poses
+    Build_Reference(pSrc, animName);
+
+    // register animation entry
+    g_panimation[g_numani] = (s_animation_t *)calloc(1, sizeof(s_animation_t));
+    s_animation_t *pa = g_panimation[g_numani];
+    pa->index      = g_numani++;
+    pa->source     = pSrc;
+    pa->startframe = 0;
+    pa->endframe   = 0;
+    pa->numframes  = 1;
+    Q_strncpy(pa->name,          animName, sizeof(pa->name));
+    Q_strncpy(pa->filename,      pSrc->filename, sizeof(pa->filename));
+    Q_strncpy(pa->animationname, animName, sizeof(pa->animationname));
+    VectorCopy(g_defaultadjust, pa->adjust);
+    pa->rotation       = g_defaultrotation;
+    pa->scale          = 1.0f;
+    pa->fps            = 30.0f;
+    pa->motionrollback = g_StudioMdlContext.defaultMotionRollback;
+}
+
+struct DP_BoneParams {
+    bool   ignore        = false;
+    bool   hasOffsetPos  = false;
+    bool   hasOffsetAngle = false;
+    bool   hasIgnorePos  = false;
+    bool   hasIgnoreAngle = false;
+    Vector offsetPos;
+    Vector offsetAngle; 
+    Vector ignorePos;
+    Vector ignoreAngle;
+};
+
+void Cmd_DeltaProportions() {
+    char refPath[MAX_PATH]  = {};
+    int  refFrame           = 0;
+    char propPath[MAX_PATH] = {};
+    int  propFrame          = 0;
+    bool hasProp            = false;
+    CUtlString qcRefBlock, qcPropBlock;
+    CUtlDict<DP_BoneParams, int> boneCfg;  // bone name -> per-bone overrides
+
+    // Toppi: This function is so long! TODO: Comeback and do revision!!
+
+    GetToken(true);
+    if (token[0] != '{')
+        TokenError("$deltaproportions: expected '{'\n");
+
+    while (GetToken(true)) {
+        if (token[0] == '}') break;
+        if (!Q_stricmp(token, "referencepose")) {
+            GetToken(false); Q_strncpy(refPath,  token, sizeof(refPath));
+            GetToken(false); refFrame  = atoi(token);
+        } else if (!Q_stricmp(token, "proportionpose")) {
+            GetToken(false); Q_strncpy(propPath, token, sizeof(propPath));
+            GetToken(false); propFrame = atoi(token);
+            hasProp = true;
+        } else if (!Q_stricmp(token, "appendreference")) {
+            qcRefBlock  = DP_CollectAnimBlock();
+        } else if (!Q_stricmp(token, "appendproportions")) {
+            qcPropBlock = DP_CollectAnimBlock();
+        } else {
+            char boneName[MAXSTUDIONAME];
+            Q_strncpy(boneName, token, sizeof(boneName));
+
+            DP_BoneParams bp;
+            while (TokenAvailable()) {
+                GetToken(false);
+                if (!Q_stricmp(token, "ignore")) {
+                    bp.ignore = true;
+                } else if (!Q_stricmp(token, "offsetpos")) {
+                    GetToken(false); bp.offsetPos.x = (float)atof(token);
+                    GetToken(false); bp.offsetPos.y = (float)atof(token);
+                    GetToken(false); bp.offsetPos.z = (float)atof(token);
+                    bp.hasOffsetPos = true;
+                } else if (!Q_stricmp(token, "offsetangle")) {
+                    GetToken(false); bp.offsetAngle.x = (float)atof(token);
+                    GetToken(false); bp.offsetAngle.y = (float)atof(token);
+                    GetToken(false); bp.offsetAngle.z = (float)atof(token);
+                    bp.hasOffsetAngle = true;
+                } else if (!Q_stricmp(token, "ignorepos")) {
+                    GetToken(false); bp.ignorePos.x = (float)atof(token);
+                    GetToken(false); bp.ignorePos.y = (float)atof(token);
+                    GetToken(false); bp.ignorePos.z = (float)atof(token);
+                    bp.hasIgnorePos = true;
+                } else if (!Q_stricmp(token, "ignoreangle")) {
+                    GetToken(false); bp.ignoreAngle.x = (float)atof(token);
+                    GetToken(false); bp.ignoreAngle.y = (float)atof(token);
+                    GetToken(false); bp.ignoreAngle.z = (float)atof(token);
+                    bp.hasIgnoreAngle = true;
+                } else {
+                    TokenError("$deltaproportions: unknown bone param '%s' for bone '%s'\n",
+                               token, boneName);
+                }
+            }
+            boneCfg.Insert(boneName, bp);
+        }
+    }
+
+    if (!refPath[0])
+        TokenError("$deltaproportions: 'referencepose' is required\n");
+
+    // load reference source
+    s_source_t *pRef = Load_Source(refPath, "");
+    if (!pRef || !pRef->numbones || !pRef->m_Animations.Count())
+        MdlError("$deltaproportions: could not load referencepose '%s'\n", refPath);
+    s_sourceanim_t &refAnim = pRef->m_Animations[0];
+    if (refFrame >= refAnim.numframes)
+        MdlError("$deltaproportions: referencepose frame %d out of range (has %d)\n",
+                 refFrame, refAnim.numframes);
+    s_bone_t *refBones = refAnim.rawanim[refFrame];
+
+    // load or derive proportion source
+    s_source_t *pProp     = nullptr;
+    s_bone_t   *propBones = nullptr;
+    if (hasProp) {
+        pProp = Load_Source(propPath, "");
+        if (!pProp || !pProp->numbones || !pProp->m_Animations.Count())
+            MdlError("$deltaproportions: could not load proportionpose '%s'\n", propPath);
+        s_sourceanim_t &propAnim = pProp->m_Animations[0];
+        if (propFrame >= propAnim.numframes)
+            MdlError("$deltaproportions: proportionpose frame %d out of range (has %d)\n",
+                     propFrame, propAnim.numframes);
+        propBones = propAnim.rawanim[propFrame];
+    } else {
+        for (int si = 0; si < g_numsources; si++) {
+            if (g_source[si] && g_source[si]->isActiveModel &&
+                g_source[si]->numbones > 0 && g_source[si]->m_Animations.Count()) {
+                pProp     = g_source[si];
+                propBones = pProp->m_Animations[0].rawanim[0];
+                break;
+            }
+        }
+        if (!pProp)
+            MdlError("$deltaproportions: 'proportionpose' omitted but no $body/$model loaded yet\n");
+    }
+
+    int nBones = pRef->numbones;
+
+    CUtlDict<int, int> propBoneIdx;
+    for (int i = 0; i < pProp->numbones; i++)
+        propBoneIdx.Insert(pProp->localBone[i].name, i);
+
+    CUtlVector<DP_AbsTransform> propAbs;
+    DP_BuildAbsTransforms(pProp, propBones, propAbs);
+
+    auto getBoneCfg = [&](const char *name) -> const DP_BoneParams * {
+        int bi = boneCfg.Find(name);
+        return (bi != boneCfg.InvalidIndex()) ? &boneCfg[bi] : nullptr;
+    };
+
+    // world rotation from proportion pose; position derived from reference hierarchy
+    CUtlVector<DP_AbsTransform> refNew;
+    refNew.SetCount(nBones);
+    for (int i = 0; i < nBones; i++) {
+        int par = pRef->localBone[i].parent;
+
+        Vector absPos;
+        if (par < 0) {
+            absPos = refBones[i].pos;
+        } else {
+            Vector rotated;
+            QuaternionMultiply(refNew[par].rot, refBones[i].pos, rotated);
+            absPos = refNew[par].pos + rotated;
+        }
+
+        const DP_BoneParams *bp = getBoneCfg(pRef->localBone[i].name);
+        int pi = propBoneIdx.Find(pRef->localBone[i].name);
+        bool hasMatch = (pi != propBoneIdx.InvalidIndex()) && !(bp && bp->ignore);
+
+        Quaternion absRot;
+        if (hasMatch) {
+            if (bp && bp->hasIgnoreAngle) {
+                // compute reference world rotation to blend with proportion on masked axes
+                Quaternion localRot;
+                AngleQuaternion(refBones[i].rot, localRot);
+                Quaternion refWorldRot;
+                if (par >= 0)
+                    QuaternionMult(refNew[par].rot, localRot, refWorldRot);
+                else
+                    refWorldRot = localRot;
+                RadianEuler refE, propE;
+                QuaternionAngles(refWorldRot, refE);
+                QuaternionAngles(propAbs[pi].rot, propE);
+                RadianEuler masked(
+                    bp->ignoreAngle.x ? refE.x : propE.x,
+                    bp->ignoreAngle.y ? refE.y : propE.y,
+                    bp->ignoreAngle.z ? refE.z : propE.z);
+                AngleQuaternion(masked, absRot);
+            } else {
+                absRot = propAbs[pi].rot;
+            }
+        } else {
+            Quaternion localRot;
+            AngleQuaternion(refBones[i].rot, localRot);
+            if (par >= 0)
+                QuaternionMult(refNew[par].rot, localRot, absRot);
+            else
+                absRot = localRot;
+        }
+        refNew[i] = { absPos, absRot };
+    }
+
+    // world position from proportion pose; rotation unchanged
+    CUtlVector<DP_AbsTransform> propNew;
+    propNew.SetCount(nBones);
+    for (int i = 0; i < nBones; i++) {
+        int par = pRef->localBone[i].parent;
+
+        Vector derivedPos;
+        if (par < 0) {
+            derivedPos = refBones[i].pos;
+        } else {
+            Vector rotated;
+            QuaternionMultiply(propNew[par].rot, refBones[i].pos, rotated);
+            derivedPos = propNew[par].pos + rotated;
+        }
+
+        const DP_BoneParams *bp = getBoneCfg(pRef->localBone[i].name);
+        int pi = propBoneIdx.Find(pRef->localBone[i].name);
+        bool hasMatch = (pi != propBoneIdx.InvalidIndex()) && !(bp && bp->ignore);
+
+        Vector absPos;
+        if (hasMatch) {
+            if (bp && bp->hasIgnorePos) {
+                const Vector &pp = propAbs[pi].pos;
+                absPos.x = bp->ignorePos.x ? derivedPos.x : pp.x;
+                absPos.y = bp->ignorePos.y ? derivedPos.y : pp.y;
+                absPos.z = bp->ignorePos.z ? derivedPos.z : pp.z;
+            } else {
+                absPos = propAbs[pi].pos;
+            }
+        } else {
+            absPos = derivedPos;
+        }
+        propNew[i] = { absPos, refNew[i].rot };
+    }
+
+    // convert world transforms back to local space; apply per-bone offsets to a_proportions
+    CUtlVector<Vector>      refLP, propLP;
+    CUtlVector<RadianEuler> refLR, propLR;
+    refLP.SetCount(nBones);  propLP.SetCount(nBones);
+    refLR.SetCount(nBones);  propLR.SetCount(nBones);
+
+    for (int i = 0; i < nBones; i++) {
+        int par = pRef->localBone[i].parent;
+        const DP_BoneParams *bp = getBoneCfg(pRef->localBone[i].name);
+
+        // ignored bones are excluded from animation data entirely via the skip mask
+        if (bp && bp->ignore)
+            continue;
+
+        // reference local (no per-bone offsets)
+        if (par < 0) {
+            refLP[i] = refNew[i].pos;
+            QuaternionAngles(refNew[i].rot, refLR[i]);
+        } else {
+            const DP_AbsTransform &parAbs = refNew[par];
+            Quaternion parInv = { -parAbs.rot.x, -parAbs.rot.y, -parAbs.rot.z, parAbs.rot.w };
+            Quaternion localRot;
+            QuaternionMult(parInv, refNew[i].rot, localRot);
+            QuaternionAngles(localRot, refLR[i]);
+            Vector diff = refNew[i].pos - parAbs.pos;
+            QuaternionMultiply(parInv, diff, refLP[i]);
+        }
+
+        // proportions local - keep quaternion so offsets can be applied before euler conversion
+        Quaternion propLocalRot;
+        if (par < 0) {
+            propLP[i]    = propNew[i].pos;
+            propLocalRot = propNew[i].rot;
+        } else {
+            const DP_AbsTransform &parAbs = propNew[par];
+            Quaternion parInv = { -parAbs.rot.x, -parAbs.rot.y, -parAbs.rot.z, parAbs.rot.w };
+            QuaternionMult(parInv, propNew[i].rot, propLocalRot);
+            Vector diff = propNew[i].pos - parAbs.pos;
+            QuaternionMultiply(parInv, diff, propLP[i]);
+        }
+
+        // apply per-bone offsets to a_proportions (local space)
+        if (bp) {
+            if (bp->hasOffsetPos) {
+                Vector rotated;
+                QuaternionMultiply(propLocalRot, bp->offsetPos, rotated);
+                propLP[i] += rotated;
+            }
+            if (bp->hasOffsetAngle) {
+                RadianEuler offE(DEG2RAD(bp->offsetAngle.x),
+                                 DEG2RAD(bp->offsetAngle.y),
+                                 DEG2RAD(bp->offsetAngle.z));
+                Quaternion offRot, newRot;
+                AngleQuaternion(offE, offRot);
+                QuaternionMult(propLocalRot, offRot, newRot);
+                propLocalRot = newRot;
+            }
+        }
+        QuaternionAngles(propLocalRot, propLR[i]);
+    }
+
+    // build skip mask so ignored bones are absent from both animations
+    // which can conflict with $unlockdefinebones
+    bool skipBones[MAXSTUDIOSRCBONES] = {};
+    for (int i = 0; i < nBones; i++) {
+        const DP_BoneParams *bp = getBoneCfg(pRef->localBone[i].name);
+        skipBones[i] = bp && bp->ignore;
+    }
+
+    DP_RegisterInMemoryAnim("a_reference",   pRef, refLP,  refLR,  skipBones);
+    DP_RegisterInMemoryAnim("a_proportions", pRef, propLP, propLR, skipBones);
+
+    DP_ApplyAnimBlock("a_reference",   qcRefBlock);
+    DP_ApplyAnimBlock("a_proportions", qcPropBlock);
+
+    Msg("Delta Proportions: registered 'a_reference' and 'a_proportions'\n");
+}
 
 //
 // This is the master list of the commands a QC file supports.
@@ -7653,6 +8113,7 @@ MDLCommand_t g_Commands[] =
                 {"$skiptransition",                  Cmd_Skiptransition,},
                 {"$calctransitions",                 Cmd_CalcTransitions,},
                 {"$staticprop",                      Cmd_StaticProp,},
+                {"$staticproppose",                  Cmd_StaticPropPose,},
                 {"$zbrush",                          Cmd_ZBrush,},
                 {"$realignbones",                    Cmd_RealignBones,},
                 {"$forcerealign",                    Cmd_ForceRealign,},
@@ -7709,6 +8170,11 @@ MDLCommand_t g_Commands[] =
                 {"$rendermesh",                       Cmd_RenderMesh,},
                 {"$driverbone",                       Cmd_DriverBone,},
                 {"$driverlookat",                     Cmd_DriverLookAt,},
+                {"$elif",                             Cmd_Elif,},
+                {"$else",                             Cmd_Else,},
+                {"$case",                             Cmd_Case,},
+                {"$default",                          Cmd_Default,},
+                {"$deltaproportions",                 Cmd_DeltaProportions,},
         };
 
 int g_nMDLCommandCount = ARRAYSIZE(g_Commands);

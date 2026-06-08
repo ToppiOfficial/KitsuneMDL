@@ -27,6 +27,9 @@ A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](
 - New `ignorescale` parameter for `$animation` and `$sequence`
 - New `$driverbone` and `driverlookat` to create procedural bone without the need for VRD files
 - New `$rendermesh` for DMX models containing multiple DMEMesh elements
+- New `$if $elif $else` and `$switch` conditional commands.
+- New `$staticproppose <animation_file> <frame>` to bake a custom pose into the geometry skeleton to a single `static_prop`. Cannot be used together with `$staticprop`. (Doesn't work as expected!)
+- New `$deltaproportions` to generate the `a_reference` and `a_proportions`. See `docs/deltaproportions.txt`.
 - Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch.
 - Can compile for DirectX8 and can be opted out with `-nodx80` similar to StudioMDL++
 - Recreated some features from StudioMDL++ and NekoMDL

@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright ï¿½ 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -90,5 +90,9 @@ public:
 extern IScriptLib *scriptlib;
 extern IScriptLib *g_pScriptLib;
 
+// Variable lookup (defined variables from $definevariable / $redefinevariable).
+// Returns the variable's value string, or nullptr if not defined.
+const char* LookupVariableValue(const char* name);
+bool IsVariableDefined(const char* name);
 
 #endif // SCRIPLIB_H

@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright ï¿½ 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -12,6 +12,7 @@
 #include "tier2/tier2.h"
 #include "cmdlib.h"
 #include "scriplib.h"
+#include <stdlib.h>
 #if defined( _X360 )
 #include "xbox\xbox_win32stubs.h"
 #endif
@@ -258,6 +259,424 @@ void RedefineVariable( char *variablename )
 	{
 		Error("Cannot redefine undefined variable \"%s\". Use $definevariable instead.\n", v.param );
 	}
+}
+
+
+const char* LookupVariableValue(const char* name) {
+    for (int i = 0; i < g_definevariable.Count(); i++) {
+        if (!Q_strcmp(g_definevariable[i].param, name))
+            return g_definevariable[i].value;
+    }
+    char nameLc[256];
+    V_strncpy(nameLc, name, sizeof(nameLc));
+    strlwr(nameLc);
+    for (int i = 0; i < g_definevariable.Count(); i++) {
+        if (!Q_strcmp(g_definevariable[i].param_lcase, nameLc))
+            return g_definevariable[i].value;
+    }
+    return nullptr;
+}
+
+bool IsVariableDefined(const char* name) {
+    return LookupVariableValue(name) != nullptr;
+}
+
+/*
+==============
+Conditional processing ($if/$elif/$else, $switch/$case/$default)
+==============
+*/
+
+static int s_conditionalDepth = 0;
+static const int k_MaxConditionalNesting = 3;
+static const int k_MaxElifCount = 8;
+static const int k_MaxCaseCount = 24;
+
+typedef struct {
+    char* data;
+    int   len;
+    int   cap;
+} ScripBuf;
+
+static void ScripBuf_Init(ScripBuf* s) { s->data = nullptr; s->len = 0; s->cap = 0; }
+
+static void ScripBuf_PushChar(ScripBuf* s, char c) {
+    if (s->len + 2 > s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 1024;
+        s->data = (char*)realloc(s->data, s->cap);
+        if (!s->data) Error("ScripBuf: out of memory\n");
+    }
+    s->data[s->len++] = c;
+    s->data[s->len] = '\0';
+}
+
+static void ScripBuf_Free(ScripBuf* s) { free(s->data); ScripBuf_Init(s); }
+static bool ScripBuf_Empty(const ScripBuf* s) { return s->len == 0; }
+
+// Transfer ownership: dst gets src's buffer, src becomes empty
+static void ScripBuf_Steal(ScripBuf* dst, ScripBuf* src) {
+    ScripBuf_Free(dst);
+    *dst = *src;
+    ScripBuf_Init(src);
+}
+
+#define SCRIPLIB_MAX_COND_TOKENS 64
+typedef struct {
+    char toks[SCRIPLIB_MAX_COND_TOKENS][MAXTOKEN];
+    int  count;
+} CondToks;
+
+static void CondToks_Init(CondToks* c) { c->count = 0; }
+
+static void CondToks_Push(CondToks* c, const char* tok) {
+    if (c->count >= SCRIPLIB_MAX_COND_TOKENS)
+        Error("$if: too many tokens in condition (max %d)\n", SCRIPLIB_MAX_COND_TOKENS);
+    V_strncpy(c->toks[c->count++], tok, MAXTOKEN);
+}
+
+// Collect raw chars from current script_p ('{' already consumed) up to matching '}'.
+// Closing '}' is consumed but not stored. Updates script->script_p and line counters.
+static void CollectBlockContentRaw(ScripBuf* out) {
+    const char* p = script->script_p;
+    int depth = 1;
+    bool inQuote = false;
+    while (p < script->end_p && depth > 0) {
+        char c = *p;
+        if (inQuote) {
+            ScripBuf_PushChar(out, c);
+            if (c == '"') inQuote = false;
+            p++;
+        } else if (c == '"') {
+            inQuote = true;
+            ScripBuf_PushChar(out, c);
+            p++;
+        } else if (c == '/' && (p + 1) < script->end_p && *(p + 1) == '/') {
+            while (p < script->end_p && *p != '\n') ScripBuf_PushChar(out, *p++);
+
+        } else if (c == '#' || c == ';') {
+            while (p < script->end_p && *p != '\n') ScripBuf_PushChar(out, *p++);
+
+        } else if (c == '/' && (p + 1) < script->end_p && *(p + 1) == '*') {
+            ScripBuf_PushChar(out, *p++); ScripBuf_PushChar(out, *p++);
+            while ((p + 1) < script->end_p && !(*p == '*' && *(p + 1) == '/')) {
+                if (*p == '\n') { script->line++; scriptline = script->line; }
+                ScripBuf_PushChar(out, *p++);
+            }
+            if ((p + 1) < script->end_p) { ScripBuf_PushChar(out, *p++); ScripBuf_PushChar(out, *p++); }
+        } else if (c == '{') {
+            depth++;
+            ScripBuf_PushChar(out, c); p++;
+        } else if (c == '}') {
+            depth--;
+            if (depth > 0) ScripBuf_PushChar(out, c);
+            p++;
+        } else {
+            if (c == '\n') { script->line++; scriptline = script->line; }
+            ScripBuf_PushChar(out, c); p++;
+        }
+    }
+    script->script_p = (char*)p;
+}
+
+// Push raw source text onto the script stack for transparent execution.
+// EndOfScript will free the buffer and pop the stack automatically.
+static void PushConditionalBlock(ScripBuf* content, int startLine) {
+    if (ScripBuf_Empty(content)) return;
+    if (script == nullptr) script = scriptstack;
+    script++;
+    if (script == &scriptstack[MAX_INCLUDES])
+        Error("script file exceeded MAX_INCLUDES");
+    int sz = content->len;
+    char* buf = (char*)malloc(sz + 2);
+    if (!buf) Error("PushConditionalBlock: out of memory\n");
+    memcpy(buf, content->data, sz);
+    buf[sz]     = '\n';
+    buf[sz + 1] = '\0';
+    V_strcpy(script->filename, "conditional block");
+    script->buffer   = buf;
+    script->script_p = buf;
+    script->end_p    = buf + sz + 1;
+    script->line     = startLine;
+    scriptline       = startLine;
+    endofscript      = false;
+    tokenready       = false;
+}
+
+// ---- Condition expression evaluator ----
+
+static bool s_isTruthy(const char* s) {
+    if (!s || !*s) return false;
+    if (!strcmp(s, "0")) return false;
+    if (!Q_stricmp(s, "false")) return false;
+    return true;
+}
+
+static bool s_isNumericStr(const char* s) {
+    if (!s || !*s) return false;
+    if (*s == '-' || *s == '+') s++;
+    if (!*s) return false;
+    bool hasDig = false;
+    while (*s >= '0' && *s <= '9') { s++; hasDig = true; }
+    if (*s == '.') { s++; while (*s >= '0' && *s <= '9') { s++; hasDig = true; } }
+    return hasDig && (*s == '\0');
+}
+
+static bool s_compareValues(const char* lhs, const char* op, const char* rhs) {
+    bool num = s_isNumericStr(lhs) && s_isNumericStr(rhs);
+    double dL = num ? strtod(lhs, nullptr) : 0.0;
+    double dR = num ? strtod(rhs, nullptr) : 0.0;
+    int sc = strcmp(lhs, rhs);
+    if (!strcmp(op, "==")) return num ? dL == dR : sc == 0;
+    if (!strcmp(op, "=!")) return num ? dL != dR : sc != 0;
+    if (!strcmp(op, ">"))  return num ? dL > dR  : sc > 0;
+    if (!strcmp(op, "<"))  return num ? dL < dR  : sc < 0;
+    if (!strcmp(op, ">=")) return num ? dL >= dR : sc >= 0;
+    if (!strcmp(op, "<=")) return num ? dL <= dR : sc <= 0;
+    return false;
+}
+
+typedef struct { const CondToks* ct; int pos; } CondEval;
+
+static bool ce_atEnd(const CondEval* e) { return e->pos >= e->ct->count; }
+static const char* ce_cur(const CondEval* e) { return e->ct->toks[e->pos]; }
+
+static bool ce_evalOr(CondEval* e); // forward declaration for mutual recursion
+
+static bool ce_evalAtom(CondEval* e, char* outBuf, int outBufSize) {
+    if (ce_atEnd(e)) { Error("$if: unexpected end of condition\n"); outBuf[0] = '\0'; return false; }
+    const char* t = ce_cur(e);
+
+    if (!strcmp(t, "(")) {
+        e->pos++;
+        bool r = ce_evalOr(e);
+        if (!ce_atEnd(e) && !strcmp(ce_cur(e), ")")) e->pos++;
+        V_strncpy(outBuf, r ? "1" : "0", outBufSize);
+        return r;
+    }
+
+    if (Q_strnicmp(t, "None(", 5) == 0 && strlen(t) > 5 && t[strlen(t)-1] == ')') {
+        e->pos++;
+        int vlen = (int)strlen(t) - 6;
+        char vname[256]; vname[0] = '\0';
+        if (vlen > 0 && vlen < 256) { memcpy(vname, t+5, vlen); vname[vlen] = '\0'; }
+        const char* v = LookupVariableValue(vname);
+        bool none = (!v || *v == '\0');
+        V_strncpy(outBuf, none ? "1" : "0", outBufSize);
+        return none;
+    }
+
+    if (Q_strnicmp(t, "Not(", 4) == 0 && strlen(t) > 4 && t[strlen(t)-1] == ')') {
+        e->pos++;
+        int ilen = (int)strlen(t) - 5;
+        char inner[MAXTOKEN]; inner[0] = '\0';
+        if (ilen > 0 && ilen < MAXTOKEN) { memcpy(inner, t+4, ilen); inner[ilen] = '\0'; }
+        CondToks subct; CondToks_Init(&subct);
+        V_strncpy(subct.toks[0], inner, MAXTOKEN); subct.count = 1;
+        CondEval sub; sub.ct = &subct; sub.pos = 0;
+        char tmp[MAXTOKEN]; tmp[0] = '\0';
+        bool r = ce_evalAtom(&sub, tmp, sizeof(tmp));
+        bool neg = !r;
+        V_strncpy(outBuf, neg ? "1" : "0", outBufSize);
+        return neg;
+    }
+
+    e->pos++;
+    V_strncpy(outBuf, t, outBufSize);
+    return s_isTruthy(t);
+}
+
+static bool ce_evalCmp(CondEval* e) {
+    char lhs[MAXTOKEN]; lhs[0] = '\0';
+    bool lhsBool = ce_evalAtom(e, lhs, sizeof(lhs));
+    if (ce_atEnd(e)) return lhsBool;
+    const char* op = ce_cur(e);
+    if (!strcmp(op,"==") || !strcmp(op,"=!") || !strcmp(op,">") ||
+        !strcmp(op,"<")  || !strcmp(op,">=") || !strcmp(op,"<=")) {
+        e->pos++;
+        char rhs[MAXTOKEN]; rhs[0] = '\0';
+        ce_evalAtom(e, rhs, sizeof(rhs));
+        return s_compareValues(lhs, op, rhs);
+    }
+    return lhsBool;
+}
+
+static bool ce_evalAnd(CondEval* e) {
+    bool r = ce_evalCmp(e);
+    while (!ce_atEnd(e) && !strcmp(ce_cur(e), "&&")) { e->pos++; bool rhs = ce_evalCmp(e); r = r && rhs; }
+    return r;
+}
+
+static bool ce_evalOr(CondEval* e) {
+    bool r = ce_evalAnd(e);
+    while (!ce_atEnd(e) && !strcmp(ce_cur(e), "||")) { e->pos++; bool rhs = ce_evalAnd(e); r = r || rhs; }
+    return r;
+}
+
+// Peek at the next non-whitespace, non-comment word without advancing script_p.
+// Used by ProcessIfDirective to detect $elif/$else without consuming any input,
+// so GetToken can safely error on standalone $elif/$else tokens.
+static void s_peekRawWord(char* buf, int bufSize) {
+    buf[0] = '\0';
+    const char* p = script->script_p;
+    while (p < script->end_p) {
+        if ((unsigned char)*p <= ' ') { p++; continue; }
+        if ((*p == '/' && p+1 < script->end_p && *(p+1) == '/') || *p == '#' || *p == ';') {
+            while (p < script->end_p && *p != '\n') p++;
+            continue;
+        }
+        if (*p == '/' && p+1 < script->end_p && *(p+1) == '*') {
+            p += 2;
+            while (p+1 < script->end_p && !(*p == '*' && *(p+1) == '/')) p++;
+            if (p+1 < script->end_p) p += 2;
+            continue;
+        }
+        break;
+    }
+    int len = 0;
+    while (p < script->end_p && (unsigned char)*p > ' ' && *p != ';' && len < bufSize - 1)
+        buf[len++] = *p++;
+    buf[len] = '\0';
+}
+
+// Read condition tokens via GetToken until '{' (which is consumed).
+static bool s_readConditionTokens(CondToks* toks) {
+    while (GetToken(true)) {
+        if (!stricmp(token, "{")) return true;
+        if (endofscript) { Error("$if: missing '{'\n"); return false; }
+        CondToks_Push(toks, token);
+    }
+    Error("$if: missing '{'\n");
+    return false;
+}
+
+static bool s_evalConditionTokens(CondToks* toks) {
+    if (toks->count == 0) { Error("$if: empty condition\n"); return false; }
+    CondEval ev; ev.ct = toks; ev.pos = 0;
+    bool result = ce_evalOr(&ev);
+    if (ev.pos < ev.ct->count)
+        Error("$if: unexpected token '%s' in condition\n", ev.ct->toks[ev.pos]);
+    return result;
+}
+
+static void ProcessIfDirective() {
+    if (++s_conditionalDepth > k_MaxConditionalNesting) {
+        Error("$if: maximum nesting depth (%d) exceeded\n", k_MaxConditionalNesting);
+        --s_conditionalDepth; return;
+    }
+
+    bool taken = false;
+    ScripBuf chosen; ScripBuf_Init(&chosen);
+    int chosenLine = scriptline;
+    int elifCount = 0;
+
+    {
+        CondToks toks; CondToks_Init(&toks);
+        if (!s_readConditionTokens(&toks)) { --s_conditionalDepth; return; }
+        bool cond = s_evalConditionTokens(&toks);
+        int bline = scriptline;
+        ScripBuf block; ScripBuf_Init(&block);
+        CollectBlockContentRaw(&block);
+        if (cond && !taken) { taken = true; chosenLine = bline; ScripBuf_Steal(&chosen, &block); }
+        ScripBuf_Free(&block);
+    }
+
+    while (true) {
+        // Peek without consuming - GetToken cannot be used here because
+        // PushConditionalBlock clears tokenready. Peeking at raw chars means we
+        // never advance script_p unless we actually find $elif/$else.
+        char peeked[MAXTOKEN];
+        s_peekRawWord(peeked, sizeof(peeked));
+        if (!Q_stricmp(peeked, "$elif")) {
+            GetToken(true); // consume the $elif token
+            if (++elifCount > k_MaxElifCount)
+                Error("$if: maximum $elif count (%d) exceeded\n", k_MaxElifCount);
+            CondToks toks; CondToks_Init(&toks);
+            if (!s_readConditionTokens(&toks)) break;
+            bool cond = s_evalConditionTokens(&toks);
+            int bline = scriptline;
+            ScripBuf block; ScripBuf_Init(&block);
+            CollectBlockContentRaw(&block);
+            if (cond && !taken) { taken = true; chosenLine = bline; ScripBuf_Steal(&chosen, &block); }
+            ScripBuf_Free(&block);
+        } else if (!Q_stricmp(peeked, "$else")) {
+            GetToken(true); // consume the $else token
+            GetToken(true); // consume '{'
+            if (stricmp("{", token) != 0) { Error("$else: expected '{'\n"); break; }
+            int bline = scriptline;
+            ScripBuf block; ScripBuf_Init(&block);
+            CollectBlockContentRaw(&block);
+            if (!taken) { taken = true; chosenLine = bline; ScripBuf_Steal(&chosen, &block); }
+            ScripBuf_Free(&block);
+            break;
+        } else {
+            break; // not $elif or $else, nothing was consumed - no restore needed
+        }
+    }
+
+    --s_conditionalDepth;
+    PushConditionalBlock(&chosen, chosenLine);
+    ScripBuf_Free(&chosen);
+}
+
+static void ProcessSwitchDirective() {
+    if (++s_conditionalDepth > k_MaxConditionalNesting) {
+        Error("$switch: maximum nesting depth (%d) exceeded\n", k_MaxConditionalNesting);
+        --s_conditionalDepth; return;
+    }
+
+    if (!GetToken(false)) {
+        Error("$switch: expected variable name\n"); --s_conditionalDepth; return;
+    }
+    const char* varValPtr = LookupVariableValue(token);
+    if (!varValPtr) {
+        Error("$switch: undefined variable '%s'\n", token); --s_conditionalDepth; return;
+    }
+    char switchVal[MAXTOKEN];
+    V_strncpy(switchVal, varValPtr, sizeof(switchVal));
+
+    if (!GetToken(true) || stricmp("{", token) != 0) {
+        Error("$switch: expected '{'\n"); --s_conditionalDepth; return;
+    }
+
+    bool caseTaken = false; bool hasDefault = false;
+    int caseCount = 0;
+    ScripBuf chosen; ScripBuf_Init(&chosen);
+    int chosenLine = scriptline;
+
+    while (true) {
+        if (!GetToken(true) || endofscript) { Error("$switch: unexpected end of file\n"); break; }
+        if (!stricmp("}", token)) break;
+
+        if (!Q_stricmp("$case", token)) {
+            if (++caseCount > k_MaxCaseCount)
+                Error("$switch: maximum $case count (%d) exceeded\n", k_MaxCaseCount);
+            if (!GetToken(false)) { Error("$case: expected value\n"); break; }
+            char caseVal[MAXTOKEN]; V_strncpy(caseVal, token, sizeof(caseVal));
+            if (!GetToken(true) || stricmp("{", token) != 0) { Error("$case: expected '{'\n"); break; }
+            int bline = scriptline;
+            ScripBuf block; ScripBuf_Init(&block);
+            CollectBlockContentRaw(&block);
+            if (!caseTaken && !strcmp(switchVal, caseVal)) {
+                caseTaken = true; chosenLine = bline; ScripBuf_Steal(&chosen, &block);
+            }
+            ScripBuf_Free(&block);
+        } else if (!Q_stricmp("$default", token)) {
+            hasDefault = true;
+            if (!GetToken(true) || stricmp("{", token) != 0) { Error("$default: expected '{'\n"); break; }
+            int bline = scriptline;
+            ScripBuf block; ScripBuf_Init(&block);
+            CollectBlockContentRaw(&block);
+            if (!caseTaken) { chosenLine = bline; ScripBuf_Steal(&chosen, &block); }
+            ScripBuf_Free(&block);
+        } else {
+            Error("$switch: expected $case or $default, got '%s'\n", token); break;
+        }
+    }
+
+    if (!hasDefault) Error("$switch: $default is required\n");
+    --s_conditionalDepth;
+    PushConditionalBlock(&chosen, chosenLine);
+    ScripBuf_Free(&chosen);
 }
 
 /*
@@ -790,6 +1209,16 @@ skipspace:
 	{
 		GetToken (false);
 		RedefineVariable(token);
+		return GetToken (crossline);
+	}
+	else if (!stricmp (token, "$if"))
+	{
+		ProcessIfDirective();
+		return GetToken (crossline);
+	}
+	else if (!stricmp (token, "$switch"))
+	{
+		ProcessSwitchDirective();
 		return GetToken (crossline);
 	}
 	else if (AddMacroToStack( token ))
