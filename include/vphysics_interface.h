@@ -19,7 +19,7 @@ struct vcollide_t;
 struct surfacedata_t;
 struct surfacephysicsparams_t;
 
-// Layout must match Source SDK 2013 vphysics.dll exactly — 3 bools + float = 8 bytes
+// Layout must match Source SDK 2013 vphysics.dll (3 bools + float = 8 bytes)
 struct convertconvexparams_t
 {
 	bool	buildOuterConvexHull;

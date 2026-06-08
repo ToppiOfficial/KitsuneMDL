@@ -1016,6 +1016,10 @@ struct s_source_t {
     CUtlVector<int> m_rawIndexToRemapLocalIndex;
     CUtlVector<int> m_leftRemapIndexToGlobalFlexControllIndex;
     CUtlVector<int> m_rightRemapIndexToGlobalFlexControllIndex;
+
+    // DmeMesh tracking (DMX sources only): maps face[i] -> index into m_DmeMeshNames, or -1
+    CUtlVector<int16_t> m_FaceDmeMeshIdx;
+    CUtlVector<CUtlString> m_DmeMeshNames;
 };
 
 
@@ -1285,6 +1289,9 @@ struct s_quatinterpbone_t {
     Quaternion trigger[32];
     Vector pos[32];
     Quaternion quat[32];
+    // If true, pos[]/quat[] hold deltas relative to the triggerpose bind pose.
+    // simplify.cpp remaps them onto the actual skeleton bind pose from g_bonetable.
+    bool unlockbones;
 };
 
 EXTERN int g_numquatinterpbones;

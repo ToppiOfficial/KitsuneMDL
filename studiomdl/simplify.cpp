@@ -187,7 +187,7 @@ void processAnimations() {
                 case CMD_SUBTRACT:
                     panim->flags |= STUDIO_DELTA;
                     if (pcmd->u.subtract.ref && pcmd->u.subtract.ref->ignorescale != panim->ignorescale)
-                        MdlWarning("animation \"%s\" subtract ref \"%s\" has mismatched ignorescale — scale mismatch likely\n",
+                        MdlWarning("animation \"%s\" subtract ref \"%s\" has mismatched ignorescale: scale mismatch likely\n",
                                    panim->name, pcmd->u.subtract.ref->name);
                     subtractBaseAnimations(pcmd->u.subtract.ref, panim, pcmd->u.subtract.frame, pcmd->u.subtract.flags);
                     break;
@@ -200,7 +200,7 @@ void processAnimations() {
                         }
                     }
                     if (pcmd->u.ao.ref && pcmd->u.ao.ref->ignorescale != panim->ignorescale)
-                        MdlWarning("animation \"%s\" AO ref \"%s\" has mismatched ignorescale — scale mismatch likely\n",
+                        MdlWarning("animation \"%s\" AO ref \"%s\" has mismatched ignorescale: scale mismatch likely\n",
                                    panim->name, pcmd->u.ao.ref->name);
                     processAutoorigin(pcmd->u.ao.ref, panim, pcmd->u.ao.motiontype, pcmd->u.ao.srcframe,
                                       pcmd->u.ao.destframe, bone);
@@ -208,7 +208,7 @@ void processAnimations() {
                     break;
                 case CMD_MATCH:
                     if (pcmd->u.match.ref && pcmd->u.match.ref->ignorescale != panim->ignorescale)
-                        MdlWarning("animation \"%s\" match ref \"%s\" has mismatched ignorescale — scale mismatch likely\n",
+                        MdlWarning("animation \"%s\" match ref \"%s\" has mismatched ignorescale: scale mismatch likely\n",
                                    panim->name, pcmd->u.match.ref->name);
                     processMatch(pcmd->u.match.ref, panim, false);
                     break;
@@ -2898,7 +2898,7 @@ bool IsGlobalBoneXSI(const char *name, const char *bonename) {
     int len = strlen(name);
 
     int len2 = strlen(bonename);
-    if (len2 == len && strchr(bonename, '.') == NULL && stricmp(bonename, name) == 0)
+    if (len2 == len && stricmp(bonename, name) == 0)
         return true;
 
     if (len2 > len) {
@@ -3506,9 +3506,7 @@ void CollapseBones() {
             V_strcat_safe(szBoneReport, "] is unused.");
         }
 
-        // Collapse if no special status prevents it. Vertex weights alone do not block
-        // collapse — weights transfer to the parent via MapSourcesToGlobalBonetable +
-        // RemapVerticesToGlobalBones after this function removes the bone.
+        // Collapse if no special status prevents it. Vertex weights alone do not block collapse
         if (!BoneShouldCollapse(g_bonetable[k].name)) {
             if (g_StudioMdlContext.collapse_bones_message) {
                 Msg("[%08x] [keeping]    %s \n", sBoneFlags, szBoneReport);
@@ -4419,6 +4417,38 @@ void TagProceduralBones() {
         }
 
         g_bonetable[g_quatinterpbones[j].bone].flags |= BONE_ALWAYS_PROCEDURAL; // ??? what about physics rules
+
+        // $driverbone: parentname and controlparentname are not set at parse time.
+        // Populate them now from the resolved skeleton so RemapProceduralBones can run.
+        if (g_quatinterpbones[j].parentname[0] == '\0') {
+            int pIdx = g_bonetable[g_quatinterpbones[j].bone].parent;
+            if (pIdx >= 0)
+                Q_strncpy(g_quatinterpbones[j].parentname, g_bonetable[pIdx].name, MAXSTUDIONAME);
+            // parent == -1 means root bone; leave parentname empty (handled in RemapProceduralBones)
+        }
+        if (g_quatinterpbones[j].controlparentname[0] == '\0') {
+            int pIdx = g_bonetable[g_quatinterpbones[j].control].parent;
+            if (pIdx >= 0)
+                Q_strncpy(g_quatinterpbones[j].controlparentname, g_bonetable[pIdx].name, MAXSTUDIONAME);
+        }
+
+        // $driverbone unlockbones: pos[]/quat[] hold deltas from the triggerpose bind pose.
+        // Now that we know the actual skeleton bind pose, remap them:
+        //   final_pos  = target_bind_pos  + delta_pos
+        //   final_quat = target_bind_quat * delta_quat
+        if (g_quatinterpbones[j].unlockbones) {
+            int boneIdx = g_quatinterpbones[j].bone;
+            Quaternion bindQuat;
+            AngleQuaternion(g_bonetable[boneIdx].rot, bindQuat);
+            const Vector &bindPos = g_bonetable[boneIdx].pos;
+            for (int t = 0; t < g_quatinterpbones[j].numtriggers; t++) {
+                Quaternion remapped;
+                QuaternionMult(bindQuat, g_quatinterpbones[j].quat[t], remapped);
+                g_quatinterpbones[j].quat[t] = remapped;
+                g_quatinterpbones[j].pos[t]  = bindPos + g_quatinterpbones[j].pos[t];
+            }
+        }
+
         g_quatinterpbonemap[numquatinterpbones++] = j;
     }
     g_numquatinterpbones = numquatinterpbones;
@@ -4434,11 +4464,15 @@ void TagProceduralBones() {
             continue; // optimized out, don't complain
         }
 
-        g_aimatbones[j].parent = findGlobalBoneXSI(g_aimatbones[j].parentname);
-
-        if (g_aimatbones[j].parent == -1) {
-            MdlError("Missing parent control bone \"%s\" for procedural bone \"%s\"\n", g_aimatbones[j].parentname,
-                     g_aimatbones[j].bonename);
+        if (g_aimatbones[j].parentname[0] != '\0') {
+            g_aimatbones[j].parent = findGlobalBoneXSI(g_aimatbones[j].parentname);
+            if (g_aimatbones[j].parent == -1) {
+                MdlError("Missing parent control bone \"%s\" for procedural bone \"%s\"\n",
+                         g_aimatbones[j].parentname, g_aimatbones[j].bonename);
+            }
+        } else {
+            // $driverlookat: auto-derive parent from the skeleton hierarchy
+            g_aimatbones[j].parent = g_bonetable[g_aimatbones[j].bone].parent;
         }
 
         // Look for the aim bone as an attachment first
@@ -4661,12 +4695,14 @@ void RemapProceduralBones() {
         int origParent = findGlobalBoneXSI(pInterp->parentname);
         int origControlParent = findGlobalBoneXSI(pInterp->controlparentname);
 
-        if (origParent == -1) {
+        // Empty parentname means a root bone ($driverbone auto-populate left it blank).
+        // findGlobalBoneXSI("") returns -1, which matches g_bonetable[bone].parent == -1 for root.
+        if (origParent == -1 && pInterp->parentname[0] != '\0') {
             MdlError("procedural bone \"%s\", can't find orig parent \"%s\"\n\n", pInterp->bonename,
                      pInterp->parentname);
         }
 
-        if (origControlParent == -1) {
+        if (origControlParent == -1 && pInterp->controlparentname[0] != '\0') {
             MdlError("procedural bone \"%s\", can't find control parent \"%s\n\n", pInterp->bonename,
                      pInterp->controlparentname);
         }
@@ -4773,7 +4809,8 @@ void RemapProceduralBones() {
 
         int origParent = findGlobalBoneXSI(pAimAtBone->parentname);
 
-        if (origParent == -1) {
+        // Empty parentname = root bone or $driverlookat auto-derived parent; allow -1.
+        if (origParent == -1 && pAimAtBone->parentname[0] != '\0') {
             MdlError("<aimconstraint> bone \"%s\", can't find parent bone \"%s\"\n\n", pAimAtBone->bonename,
                      pAimAtBone->parentname);
         }
@@ -4786,6 +4823,11 @@ void RemapProceduralBones() {
                 break;
             }
         }
+
+        // Accept bone-targeted aims ($driverlookat): aimBone was already resolved
+        // in TagProceduralBones; treat any found bone as a valid aim target.
+        if (origAim == -1 && pAimAtBone->aimBone != -1)
+            origAim = pAimAtBone->aimBone;
 
         if (origAim == -1) {
             MdlError("<aimconstraint> bone \"%s\", can't find aim bone \"%s\n\n", pAimAtBone->bonename,

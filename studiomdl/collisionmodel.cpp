@@ -806,7 +806,7 @@ static bool BuildConvexesForLists( CUtlVector<CPhysConvex *> &convexOut, const C
 }
 
 //-----------------------------------------------------------------------------
-// ProcessJointedModel — builds per-bone collision shapes
+// ProcessJointedModel: builds per-bone collision shapes
 //-----------------------------------------------------------------------------
 int CJointedModel::ProcessJointedModel()
 {
@@ -912,7 +912,7 @@ int CJointedModel::ProcessJointedModel()
 }
 
 //-----------------------------------------------------------------------------
-// ProcessSingleBody — builds a single convex prop collision shape
+// ProcessSingleBody: builds a single convex prop collision shape
 //-----------------------------------------------------------------------------
 int CJointedModel::ProcessSingleBody()
 {
@@ -1406,7 +1406,7 @@ static void LoadSurfacePropsAll()
 }
 
 //=============================================================================
-// DoCollisionModel — entry point called from Cmd_CollisionModel / Cmd_CollisionJoints
+// DoCollisionModel: entry point called from Cmd_CollisionModel / Cmd_CollisionJoints
 //=============================================================================
 int DoCollisionModel( bool separateJoints )
 {
@@ -1443,7 +1443,7 @@ int DoCollisionModel( bool separateJoints )
 	CreateInterfaceFn physicsFactory = reinterpret_cast<CreateInterfaceFn>( GetProcAddress( hVPhysics, "CreateInterface" ) );
 	if ( !physicsFactory )
 	{
-		MdlWarning( "vphysics.dll has no CreateInterface export — wrong DLL?\n" );
+		MdlWarning( "vphysics.dll has no CreateInterface export - wrong DLL?\n" );
 		return 0;
 	}
 
@@ -1487,7 +1487,7 @@ int DoCollisionModel( bool separateJoints )
 }
 
 //=============================================================================
-// CollisionModel_Build — called after SimplifyModel(), before WriteModelFiles()
+// CollisionModel_Build: called after SimplifyModel(), before WriteModelFiles()
 //=============================================================================
 void CollisionModel_Build()
 {
@@ -1504,7 +1504,7 @@ void CollisionModel_Build()
 }
 
 //=============================================================================
-// FixCollisionHierarchy — fix parent links after bone collapse
+// FixCollisionHierarchy: fix parent links after bone collapse
 //=============================================================================
 void CJointedModel::FixCollisionHierarchy()
 {
@@ -1643,7 +1643,7 @@ static float TotalVolume( CPhysCollisionModel *pList )
 }
 
 //=============================================================================
-// CollisionModel_Write — called from WriteModelFiles() with the MDL checksum
+// CollisionModel_Write: called from WriteModelFiles() with the MDL checksum
 //=============================================================================
 void CollisionModel_Write( long checkSum )
 {

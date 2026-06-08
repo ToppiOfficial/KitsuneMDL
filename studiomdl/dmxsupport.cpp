@@ -41,6 +41,69 @@ s_model_t *g_pCurrentModel = NULL;
 
 
 void UnifyIndices(s_source_t *psource);
+void BuildIndividualMeshes(s_source_t *pSource);
+
+
+//-----------------------------------------------------------------------------
+// DmeMesh face range tracking for $rendermesh support
+//-----------------------------------------------------------------------------
+struct DmeMeshFaceRange_t {
+    char name[MAXSTUDIONAME];
+    int srcFaceStart;
+    int srcFaceEnd;
+};
+static CUtlVector<DmeMeshFaceRange_t> s_DmeMeshFaceRanges;
+
+static int ReconstructFaceSortCompare(const void *a, const void *b) {
+    int i1 = *(const int *)a;
+    int i2 = *(const int *)b;
+    int m1 = g_StudioMdlContext.face[i1].material;
+    int m2 = g_StudioMdlContext.face[i2].material;
+    if (m1 != m2) return (m1 < m2) ? -1 : 1;
+    return (i1 < i2) ? -1 : ((i1 > i2) ? 1 : 0);
+}
+
+static void BuildDmeMeshFaceTracking(s_source_t *pSource) {
+    if (s_DmeMeshFaceRanges.IsEmpty() || pSource->numfaces == 0)
+        return;
+
+    int numFaces = pSource->numfaces;
+    CUtlVector<int> faceSortMap;
+    faceSortMap.SetSize(numFaces);
+    for (int i = 0; i < numFaces; i++)
+        faceSortMap[i] = i;
+    qsort(faceSortMap.Base(), numFaces, sizeof(int), ReconstructFaceSortCompare);
+
+    // Build deduplicated DmeMesh name list
+    pSource->m_DmeMeshNames.RemoveAll();
+    for (int r = 0; r < s_DmeMeshFaceRanges.Count(); r++) {
+        const char *name = s_DmeMeshFaceRanges[r].name;
+        bool found = false;
+        for (int j = 0; j < pSource->m_DmeMeshNames.Count(); j++) {
+            if (!Q_strcmp(pSource->m_DmeMeshNames[j], name)) { found = true; break; }
+        }
+        if (!found)
+            pSource->m_DmeMeshNames.AddToTail(name);
+    }
+
+    // Map each final face to its DmeMesh
+    pSource->m_FaceDmeMeshIdx.SetSize(numFaces);
+    for (int i = 0; i < numFaces; i++) {
+        int srcFaceIdx = faceSortMap[i];
+        int16_t meshIdx = -1;
+        for (int r = 0; r < s_DmeMeshFaceRanges.Count(); r++) {
+            if (srcFaceIdx >= s_DmeMeshFaceRanges[r].srcFaceStart &&
+                srcFaceIdx < s_DmeMeshFaceRanges[r].srcFaceEnd) {
+                const char *meshName = s_DmeMeshFaceRanges[r].name;
+                for (int j = 0; j < pSource->m_DmeMeshNames.Count(); j++) {
+                    if (!Q_strcmp(pSource->m_DmeMeshNames[j], meshName)) { meshIdx = (int16_t)j; break; }
+                }
+                break;
+            }
+        }
+        pSource->m_FaceDmeMeshIdx[i] = meshIdx;
+    }
+}
 
 
 //-----------------------------------------------------------------------------
@@ -785,9 +848,15 @@ LoadMeshes(const LoadMeshInfo_t &info, CDmeDag *pDag, const matrix3x4_t &parentT
         if (!pBindState)
             return false;
 
+        int nFacesBefore = g_StudioMdlContext.numfaces;
         if (!LoadMesh(pDag, pMesh, pBindState, dagToBindPose, info.m_flScale, nBoneAssign, info.m_pBoneRemap,
                       info.m_pSource))
             return false;
+
+        DmeMeshFaceRange_t &range = s_DmeMeshFaceRanges[s_DmeMeshFaceRanges.AddToTail()];
+        Q_strncpy(range.name, pMesh->GetName(), sizeof(range.name));
+        range.srcFaceStart = nFacesBefore;
+        range.srcFaceEnd = g_StudioMdlContext.numfaces;
     }
 
     int nCount = pDag->GetChildCount();
@@ -805,6 +874,8 @@ LoadMeshes(const LoadMeshInfo_t &info, CDmeDag *pDag, const matrix3x4_t &parentT
 // Method used to add mesh data
 //-----------------------------------------------------------------------------
 static bool LoadMeshes(CDmeModel *pModel, float flScale, int *pBoneRemap, s_source_t *pSource) {
+    s_DmeMeshFaceRanges.RemoveAll();
+
     matrix3x4_t mat;
     SetIdentityMatrix(mat);
 
@@ -1643,6 +1714,7 @@ LoadModelAndSkeleton(s_source_t *pSource, BoneTransformMap_t &boneMap, CDmeDag *
         UnifyIndices(pSource);
         BuildVertexAnimations(pSource);
         BuildIndividualMeshes(pSource);
+        BuildDmeMeshFaceTracking(pSource);
     }
 
     if (g_StudioMdlContext.numfaces == 0 && pSource->numbones == 1 && !V_strcmp(pSource->localBone[0].name, "defaultRoot")) {

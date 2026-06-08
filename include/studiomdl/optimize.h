@@ -211,8 +211,10 @@ struct MaterialReplacementListHeader_t
 	}
 };
 
-// Legacy structs for TF2/L4D2 compatibility — identical to the above but without
-// the numTopologyIndices/topologyOffset fields added in the Alien Swarm branch.
+// Structs for Source2013/TF2 and L4D engine branch
+// identical to the above but without the numTopologyIndices/topologyOffset 
+// fields added in the Alien Swarm branch.
+// TODO: Is this correct??  VTX doesn't crash so I supposed so.
 struct LegacyStripHeader_t
 {
 	int numIndices;

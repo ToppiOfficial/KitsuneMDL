@@ -816,7 +816,7 @@ namespace OptimizedModel {
         }
 
         {
-            // meshoptimizer requires unsigned int indices — upcast, optimize, downcast back
+            // meshoptimizer requires unsigned int indices (upcast, optimize, downcast back)
             size_t indexCount = (size_t)sourceIndices.Count();
             CUtlVector<unsigned int> indices32;
             indices32.SetSize((int)indexCount);

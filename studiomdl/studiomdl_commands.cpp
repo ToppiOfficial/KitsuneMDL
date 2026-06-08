@@ -22,6 +22,40 @@
 
 
 extern StudioMdlContext g_StudioMdlContext;
+
+//-----------------------------------------------------------------------------
+// $rendermesh: named filtered views of DMX files
+//-----------------------------------------------------------------------------
+
+#define MAX_RENDERMESH_DEFS      256
+#define MAX_RENDERMESH_OVERRIDES 128
+
+struct s_rendermesh_override_t {
+    char meshName[MAXSTUDIONAME];
+};
+
+struct s_rendermesh_def_t {
+    char name[MAXSTUDIONAME];
+    char filename[MAX_PATH];
+    bool defaultState;
+    s_rendermesh_override_t overrides[MAX_RENDERMESH_OVERRIDES];
+    int numOverrides;
+};
+
+static s_rendermesh_def_t g_rendermeshDefs[MAX_RENDERMESH_DEFS];
+static int g_numRendermeshDefs = 0;
+
+static const s_rendermesh_def_t *FindRenderMeshDef(const char *name) {
+    for (int i = 0; i < g_numRendermeshDefs; i++)
+        if (!Q_strcmp(g_rendermeshDefs[i].name, name))
+            return &g_rendermeshDefs[i];
+    return nullptr;
+}
+
+static s_source_t *CloneSourceGeometry(s_source_t *pOrig);
+static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate);
+static void ApplyRenderMeshFilter(s_source_t *pSource, const s_rendermesh_def_t *pDef);
+
 //-----------------------------------------------------------------------------
 // Parse contents flags
 //-----------------------------------------------------------------------------
@@ -119,7 +153,9 @@ bool ParseOptionStudio(CDmeSourceSkin *pSkin) {
 // Parse the body command from a .qc file
 //-----------------------------------------------------------------------------
 void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale, bool bFlipTriangles, bool bQuadSubd) {
-    Q_strncpy(pmodel->filename, pFullPath, sizeof(pmodel->filename));
+    // If the name matches a $rendermesh definition, resolve it to the underlying DMX file.
+    const s_rendermesh_def_t *pRenderMeshDef = FindRenderMeshDef(pFullPath);
+    Q_strncpy(pmodel->filename, pRenderMeshDef ? pRenderMeshDef->filename : pFullPath, sizeof(pmodel->filename));
 
     if (flScale != 0.0f) {
         pmodel->scale = g_currentscale = flScale;
@@ -128,15 +164,15 @@ void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale
     }
 
     g_pCurrentModel = pmodel;
-
-    // load source
     pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true);
-
     g_pCurrentModel = NULL;
-
-    // Reset currentscale to whatever global we currently have set
-    // g_defaultscale gets set in Cmd_ScaleUp everytime the $scale command is used.
     g_currentscale = g_defaultscale;
+
+    if (pRenderMeshDef && pmodel->source) {
+        s_source_t *pClone = CloneSourceGeometry(pmodel->source);
+        pmodel->source = pClone;
+        ApplyRenderMeshFilter(pClone, pRenderMeshDef);
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -6555,7 +6591,7 @@ int ParseSequence(s_sequence_t *pseq, bool isAppend) {
             }
         }
         if (bHasIgnore && bHasNormal)
-            MdlWarning("sequence \"%s\" blends animations with mixed ignorescale settings — scale mismatch at runtime\n",
+            MdlWarning("sequence \"%s\" blends animations with mixed ignorescale settings - scale mismatch at runtime\n",
                        pseq->name);
     }
 
@@ -6941,6 +6977,611 @@ void Load_ProceduralBones() {
     fclose(g_StudioMdlContext.fpInput);
 }
 
+//-----------------------------------------------------------------------------
+// $rendermesh - filter helpers
+//-----------------------------------------------------------------------------
+
+static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
+    if (g_numsources >= MAXSTUDIOSEQUENCES)
+        MdlError("CloneSourceGeometry: ran out of source slots\n");
+    s_source_t *pClone = (s_source_t *)calloc(1, sizeof(s_source_t));
+    g_source[g_numsources++] = pClone;
+
+    // Shallow copy all fields; CUtlVector internals are shared with pOrig for now.
+    memcpy(pClone, pOrig, sizeof(s_source_t));
+
+    // Deep copy vertex[] and face[]; the filter will free and replace them.
+    pClone->vertex = pOrig->numvertices
+        ? (s_vertexinfo_t *)malloc(pOrig->numvertices * sizeof(s_vertexinfo_t)) : nullptr;
+    if (pClone->vertex)
+        memcpy(pClone->vertex, pOrig->vertex, pOrig->numvertices * sizeof(s_vertexinfo_t));
+    pClone->face = pOrig->numfaces
+        ? (s_face_t *)malloc(pOrig->numfaces * sizeof(s_face_t)) : nullptr;
+    if (pClone->face)
+        memcpy(pClone->face, pOrig->face, pOrig->numfaces * sizeof(s_face_t));
+
+    // Re-init tracking vectors with independent copies so filters don't interfere.
+    memset(&pClone->m_FaceDmeMeshIdx, 0, sizeof(pClone->m_FaceDmeMeshIdx));
+    pClone->m_FaceDmeMeshIdx.AddVectorToTail(pOrig->m_FaceDmeMeshIdx);
+    memset(&pClone->m_DmeMeshNames, 0, sizeof(pClone->m_DmeMeshNames));
+    for (int i = 0; i < pOrig->m_DmeMeshNames.Count(); i++)
+        pClone->m_DmeMeshNames.AddToTail(pOrig->m_DmeMeshNames[i]);
+
+    // Re-init m_Animations: rawanim is shared (read-only after load),
+    // vanim arrays are deep-copied because the filter modifies them in-place.
+    memset(&pClone->m_Animations, 0, sizeof(pClone->m_Animations));
+    for (int i = 0; i < pOrig->m_Animations.Count(); i++) {
+        const s_sourceanim_t &origAnim = pOrig->m_Animations[i];
+        int idx = pClone->m_Animations.AddToTail();
+        s_sourceanim_t &ca = pClone->m_Animations[idx];
+        memcpy(&ca, &origAnim, sizeof(s_sourceanim_t));
+        for (int fr = 0; fr < MAXSTUDIOANIMFRAMES; fr++) {
+            if (origAnim.vanim[fr] && origAnim.numvanims[fr] > 0) {
+                int n = origAnim.numvanims[fr];
+                ca.vanim[fr] = (s_vertanim_t *)malloc(n * sizeof(s_vertanim_t));
+                memcpy(ca.vanim[fr], origAnim.vanim[fr], n * sizeof(s_vertanim_t));
+            }
+        }
+    }
+    return pClone;
+}
+
+static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate) {
+    if (pSource->m_FaceDmeMeshIdx.IsEmpty() || pSource->numfaces == 0)
+        return;
+
+    // Build filter mask: which DmeMesh indices match the provided names
+    int numDmeMeshes = pSource->m_DmeMeshNames.Count();
+    CUtlVector<bool> inFilterSet;
+    inFilterSet.SetSize(numDmeMeshes);
+    for (int i = 0; i < numDmeMeshes; i++) inFilterSet[i] = false;
+    for (int k = 0; k < meshNames.Count(); k++) {
+        for (int j = 0; j < numDmeMeshes; j++) {
+            if (!Q_strcmp(meshNames[k], pSource->m_DmeMeshNames[j])) { inFilterSet[j] = true; break; }
+        }
+    }
+
+    // Decide which faces to keep
+    CUtlVector<bool> keepFace;
+    keepFace.SetSize(pSource->numfaces);
+    for (int i = 0; i < pSource->numfaces; i++) {
+        int16_t dmeMeshIdx = pSource->m_FaceDmeMeshIdx[i];
+        bool inSet = (dmeMeshIdx >= 0 && dmeMeshIdx < numDmeMeshes) && inFilterSet[dmeMeshIdx];
+        keepFace[i] = isIsolate ? inSet : !inSet;
+    }
+
+    // Rebuild vertex and face arrays per material
+    CUtlVector<s_vertexinfo_t> newVerts;
+    CUtlVector<s_face_t> newFaces;
+    CUtlVector<int16_t> newFaceDmeMeshIdx;
+    s_mesh_t newMesh[MAXSTUDIOSKINS];
+    int newMeshIndex[MAXSTUDIOSKINS];
+    int newNummeshes = 0;
+    memset(newMesh, 0, sizeof(newMesh));
+    memset(newMeshIndex, 0, sizeof(newMeshIndex));
+
+    // Global vertex remap: oldAbsIdx -> newAbsIdx (-1 if removed)
+    CUtlVector<int> globalVertRemap;
+    globalVertRemap.SetSize(pSource->numvertices);
+    for (int i = 0; i < pSource->numvertices; i++) globalVertRemap[i] = -1;
+
+    for (int m = 0; m < MAXSTUDIOSKINS; m++) {
+        if (pSource->mesh[m].numfaces == 0 && pSource->mesh[m].numvertices == 0)
+            continue;
+
+        int vOffset = pSource->mesh[m].vertexoffset;
+        int fOffset = pSource->mesh[m].faceoffset;
+        int numV    = pSource->mesh[m].numvertices;
+        int numF    = pSource->mesh[m].numfaces;
+
+        // mesh-relative vert remap: -1 = unused, -2 = needed (unassigned), >=0 = new mesh-rel index
+        CUtlVector<int> vertRemap;
+        vertRemap.SetSize(numV);
+        for (int i = 0; i < numV; i++) vertRemap[i] = -1;
+
+        for (int fi = fOffset; fi < fOffset + numF; fi++) {
+            if (!keepFace[fi]) continue;
+            auto mark = [&](uint32_t v) {
+                if (v != 0xFFFFFFFFu && (int)v < numV && vertRemap[v] == -1)
+                    vertRemap[v] = -2;
+            };
+            mark(pSource->face[fi].a);
+            mark(pSource->face[fi].b);
+            mark(pSource->face[fi].c);
+            mark(pSource->face[fi].d);
+        }
+
+        int newVStart = newVerts.Count();
+        for (int i = 0; i < numV; i++) {
+            if (vertRemap[i] == -2) {
+                int newRelIdx = newVerts.Count() - newVStart;
+                globalVertRemap[vOffset + i] = newVStart + newRelIdx;
+                vertRemap[i] = newRelIdx;
+                newVerts.AddToTail(pSource->vertex[vOffset + i]);
+            }
+        }
+        int newVCount = newVerts.Count() - newVStart;
+
+        int newFStart = newFaces.Count();
+        for (int fi = fOffset; fi < fOffset + numF; fi++) {
+            if (!keepFace[fi]) continue;
+            auto remap = [&](uint32_t v) -> uint32_t {
+                return (v != 0xFFFFFFFFu && (int)v < numV) ? (uint32_t)vertRemap[v] : 0xFFFFFFFFu;
+            };
+            s_face_t nf;
+            nf.a = remap(pSource->face[fi].a);
+            nf.b = remap(pSource->face[fi].b);
+            nf.c = remap(pSource->face[fi].c);
+            nf.d = remap(pSource->face[fi].d);
+            newFaces.AddToTail(nf);
+            if (!pSource->m_FaceDmeMeshIdx.IsEmpty())
+                newFaceDmeMeshIdx.AddToTail(pSource->m_FaceDmeMeshIdx[fi]);
+        }
+        int newFCount = newFaces.Count() - newFStart;
+
+        if (newFCount > 0 || newVCount > 0) {
+            newMesh[m].vertexoffset = newVStart;
+            newMesh[m].numvertices  = newVCount;
+            newMesh[m].faceoffset   = newFStart;
+            newMesh[m].numfaces     = newFCount;
+            newMeshIndex[newNummeshes++] = m;
+        }
+    }
+
+    // Replace geometry
+    free(pSource->vertex);
+    pSource->numvertices = newVerts.Count();
+    pSource->vertex = pSource->numvertices
+        ? (s_vertexinfo_t *)malloc(pSource->numvertices * sizeof(s_vertexinfo_t)) : nullptr;
+    if (pSource->vertex)
+        memcpy(pSource->vertex, newVerts.Base(), pSource->numvertices * sizeof(s_vertexinfo_t));
+
+    free(pSource->face);
+    pSource->numfaces = newFaces.Count();
+    pSource->face = pSource->numfaces
+        ? (s_face_t *)malloc(pSource->numfaces * sizeof(s_face_t)) : nullptr;
+    if (pSource->face)
+        memcpy(pSource->face, newFaces.Base(), pSource->numfaces * sizeof(s_face_t));
+
+    memcpy(pSource->mesh, newMesh, sizeof(newMesh));
+    memcpy(pSource->meshindex, newMeshIndex, sizeof(newMeshIndex));
+    pSource->nummeshes = newNummeshes;
+
+    pSource->m_FaceDmeMeshIdx.RemoveAll();
+    pSource->m_FaceDmeMeshIdx.AddVectorToTail(newFaceDmeMeshIdx);
+
+    // Remap new-style vertex animation indices
+    for (int animIdx = 0; animIdx < pSource->m_Animations.Count(); animIdx++) {
+        s_sourceanim_t &anim = pSource->m_Animations[animIdx];
+        if (!anim.newStyleVertexAnimations) continue;
+        for (int frame = 0; frame < MAXSTUDIOANIMFRAMES; frame++) {
+            if (!anim.numvanims[frame] || !anim.vanim[frame]) continue;
+            int newCount = 0;
+            for (int k = 0; k < anim.numvanims[frame]; k++) {
+                int oldVtx = anim.vanim[frame][k].vertex;
+                int newVtx = (oldVtx >= 0 && oldVtx < globalVertRemap.Count()) ? globalVertRemap[oldVtx] : -1;
+                if (newVtx >= 0) {
+                    anim.vanim[frame][newCount] = anim.vanim[frame][k];
+                    anim.vanim[frame][newCount].vertex = newVtx;
+                    newCount++;
+                }
+            }
+            anim.numvanims[frame] = newCount;
+        }
+    }
+
+    if (pSource->numfaces == 0)
+        MdlWarning("$rendermesh: filter produced empty mesh for '%s'\n", pSource->filename);
+}
+
+
+static void ApplyRenderMeshFilter(s_source_t *pSource, const s_rendermesh_def_t *pDef) {
+    if (pSource->m_DmeMeshNames.IsEmpty()) {
+        MdlWarning("$rendermesh '%s': source '%s' has no DmeMesh tracking data (not a DMX?), skipping filter\n",
+                   pDef->name, pSource->filename);
+        return;
+    }
+
+    // Validate override mesh names exist in the source
+    for (int j = 0; j < pDef->numOverrides; j++) {
+        bool found = false;
+        for (int k = 0; k < pSource->m_DmeMeshNames.Count(); k++) {
+            if (!Q_strcmp(pDef->overrides[j].meshName, pSource->m_DmeMeshNames[k])) { found = true; break; }
+        }
+        if (!found) {
+            char available[1024] = "";
+            for (int k = 0; k < pSource->m_DmeMeshNames.Count(); k++) {
+                Q_strncat(available, pSource->m_DmeMeshNames[k].Get(), sizeof(available));
+                if (k < pSource->m_DmeMeshNames.Count() - 1) Q_strncat(available, ", ", sizeof(available));
+            }
+            MdlError("$rendermesh '%s': DmeMesh '%s' not found in '%s'\n  Available: %s\n",
+                     pDef->name, pDef->overrides[j].meshName, pSource->filename, available);
+        }
+    }
+
+    // defaultState=0: listed meshes are kept (isolate). defaultState=1: listed meshes are dropped (exclude).
+    CUtlVector<CUtlString> filterMeshes;
+    bool isIsolate = !pDef->defaultState;
+    for (int j = 0; j < pDef->numOverrides; j++)
+        filterMeshes.AddToTail(pDef->overrides[j].meshName);
+
+    if (filterMeshes.IsEmpty()) {
+        if (!pDef->defaultState)
+            MdlWarning("$rendermesh '%s': defaultState=0 with no listed meshes produces an empty model\n", pDef->name);
+        return;
+    }
+
+    ApplyDmeMeshFilter(pSource, filterMeshes, isIsolate);
+}
+
+void Cmd_RenderMesh() {
+    if (g_numRendermeshDefs >= MAX_RENDERMESH_DEFS)
+        MdlError("$rendermesh: too many definitions (max %d)\n", MAX_RENDERMESH_DEFS);
+
+    s_rendermesh_def_t &def = g_rendermeshDefs[g_numRendermeshDefs];
+    memset(&def, 0, sizeof(def));
+
+    GetToken(false);
+    Q_strncpy(def.name, token, sizeof(def.name));
+
+    for (int i = 0; i < g_numRendermeshDefs; i++) {
+        if (!Q_strcmp(g_rendermeshDefs[i].name, def.name))
+            MdlError("$rendermesh: name '%s' is already defined\n", def.name);
+    }
+
+    GetToken(false);
+    Q_strncpy(def.filename, token, sizeof(def.filename));
+
+    GetToken(false);
+    {
+        char *endptr;
+        long val = strtol(token, &endptr, 10);
+        if (*endptr != '\0' || endptr == token || (val != 0 && val != 1))
+            TokenError("$rendermesh '%s': expected 0 or 1 for defaultState, got '%s'\n", def.name, token);
+        def.defaultState = (val != 0);
+    }
+
+    GetToken(true);
+    if (token[0] != '{')
+        TokenError("$rendermesh '%s': expected '{', got '%s'\n", def.name, token);
+
+    while (true) {
+        GetToken(true);
+        if (endofscript) TokenError("$rendermesh '%s': unexpected end of file\n", def.name);
+        if (token[0] == '}') break;
+
+        if (def.numOverrides >= MAX_RENDERMESH_OVERRIDES)
+            MdlError("$rendermesh '%s': too many mesh overrides (max %d)\n", def.name, MAX_RENDERMESH_OVERRIDES);
+
+        Q_strncpy(def.overrides[def.numOverrides].meshName, token,
+                  sizeof(def.overrides[def.numOverrides].meshName));
+        def.numOverrides++;
+    }
+
+    g_numRendermeshDefs++;
+}
+
+
+//-----------------------------------------------------------------------------
+// $driverbone - inline quatinterp procedural bone driven by triggerpose frames
+// Based on $nekodriverbone from NekoMDL
+//
+// Syntax:
+//   $driverbone <driver_bone> {
+//       triggerpose <file>
+//       [unlockbones]
+//       [autotrigger <angle_deg> [<min_frame> <max_frame>]]
+//       trigger <tolerance_deg> <frame>   // as many as needed (max 32 total)
+//       ...
+//       <helper_bone_name> ...
+//   }
+//
+// For each helper bone, one STUDIO_PROC_QUATINTERP entry is emitted.
+// The driver bone's local rotation at 'frame' becomes the trigger quaternion.
+// The helper bone's local pos/quat at 'frame' becomes the target pose.
+// With 'unlockbones', helper bone position is locked to the rest pose (frame 0)
+// so rotation-only driving works across skeletons with different proportions.
+// 'autotrigger' auto-generates one trigger per frame in [min,max]; any explicit
+// 'trigger' entry for the same frame takes priority.
+//-----------------------------------------------------------------------------
+
+void Cmd_DriverBone() {
+    // Toppi: I feel like this could've been shorter
+    char driverBoneName[MAXSTUDIONAME];
+    GetToken(false);
+    Q_strncpy(driverBoneName, token, sizeof(driverBoneName));
+
+    char triggerPoseFile[MAX_PATH] = {};
+    bool unlockBones      = false;
+    bool hasAutoTrigger   = false;
+    float autoTriggerAngle = 5.0f;
+    int   autoTriggerMin  = -1;
+    int   autoTriggerMax  = -1;
+
+    struct TriggerEntry { float toleranceDeg; int frame; };
+    CUtlVector<TriggerEntry> explicitTriggers;
+
+    int  numHelperBones = 0;
+    char helperBoneNames[MAXSTUDIOBONES][MAXSTUDIONAME];
+
+    GetToken(true);
+    if (stricmp(token, "{")) {
+        MdlError("$driverbone: expected '{', got '%s'\n", token);
+        return;
+    }
+
+    while (GetToken(true)) {
+        if (!stricmp(token, "}"))
+            break;
+
+        if (!stricmp(token, "triggerpose")) {
+            GetToken(false);
+            Q_strncpy(triggerPoseFile, token, sizeof(triggerPoseFile));
+        } else if (!stricmp(token, "unlockbones")) {
+            unlockBones = true;
+        } else if (!stricmp(token, "trigger")) {
+            TriggerEntry e;
+            GetToken(false); e.toleranceDeg = (float)atof(token);
+            GetToken(false); e.frame        = atoi(token);
+            explicitTriggers.AddToTail(e);
+        } else if (!stricmp(token, "autotrigger")) {
+            hasAutoTrigger = true;
+            GetToken(false);
+            autoTriggerAngle = (float)atof(token);
+            if (TokenAvailable()) {
+                GetToken(false);
+                autoTriggerMin = atoi(token);
+                if (TokenAvailable()) {
+                    GetToken(false);
+                    autoTriggerMax = atoi(token);
+                }
+            }
+        } else {
+            if (numHelperBones < MAXSTUDIOBONES) {
+                Q_strncpy(helperBoneNames[numHelperBones++], token, MAXSTUDIONAME);
+            } else {
+                MdlWarning("$driverbone '%s': too many helper bones; ignoring '%s'\n",
+                           driverBoneName, token);
+            }
+        }
+    }
+
+    if (!triggerPoseFile[0]) {
+        MdlError("$driverbone '%s': missing 'triggerpose <file>'\n", driverBoneName);
+        return;
+    }
+    if (!numHelperBones) {
+        MdlWarning("$driverbone '%s': no helper bones specified\n", driverBoneName);
+        return;
+    }
+
+    s_source_t *pSrc = Load_Source(triggerPoseFile, "", false, false, true);
+    if (!pSrc || pSrc->m_Animations.Count() == 0) {
+        MdlError("$driverbone '%s': cannot load triggerpose '%s'\n",
+                 driverBoneName, triggerPoseFile);
+        return;
+    }
+    s_sourceanim_t *pAnim = &pSrc->m_Animations[0];
+
+    int driverLocalIdx = -1;
+    for (int i = 0; i < pSrc->numbones; i++) {
+        if (!stricmp(pSrc->localBone[i].name, driverBoneName)) {
+            driverLocalIdx = i;
+            break;
+        }
+    }
+    if (driverLocalIdx < 0) {
+        MdlError("$driverbone: driver bone '%s' not found in triggerpose '%s'\n",
+                 driverBoneName, triggerPoseFile);
+        return;
+    }
+
+    // Build full trigger list: explicit entries first, autotrigger fills the rest
+    CUtlVector<TriggerEntry> allTriggers;
+    for (int i = 0; i < explicitTriggers.Count(); i++)
+        allTriggers.AddToTail(explicitTriggers[i]);
+
+    if (hasAutoTrigger) {
+        int fMin = (autoTriggerMin >= 0) ? autoTriggerMin : 0;
+        int fMax = (autoTriggerMax >= 0) ? autoTriggerMax : (pAnim->numframes - 1);
+        fMin = max(fMin, 0);
+        fMax = min(fMax, pAnim->numframes - 1);
+        for (int f = fMin; f <= fMax; f++) {
+            bool covered = false;
+            for (int e = 0; e < explicitTriggers.Count(); e++) {
+                if (explicitTriggers[e].frame == f) { covered = true; break; }
+            }
+            if (!covered) {
+                TriggerEntry e; e.toleranceDeg = autoTriggerAngle; e.frame = f;
+                allTriggers.AddToTail(e);
+            }
+        }
+    }
+
+    if (allTriggers.Count() == 0) {
+        MdlWarning("$driverbone '%s': no triggers defined\n", driverBoneName);
+        return;
+    }
+    if (allTriggers.Count() > 32) {
+        MdlWarning("$driverbone '%s': %d triggers exceed limit of 32; truncating\n",
+                   driverBoneName, allTriggers.Count());
+        allTriggers.SetCount(32);
+    }
+
+    for (int h = 0; h < numHelperBones; h++) {
+        if (g_numquatinterpbones >= MAXSTUDIOBONES) {
+            MdlError("$driverbone: quatinterp bone limit (%d) reached\n", MAXSTUDIOBONES);
+            return;
+        }
+
+        s_quatinterpbone_t *pBone = &g_quatinterpbones[g_numquatinterpbones];
+        memset(pBone, 0, sizeof(*pBone));
+        Q_strncpy(pBone->bonename,    helperBoneNames[h], MAXSTUDIONAME);
+        Q_strncpy(pBone->controlname, driverBoneName,     MAXSTUDIONAME);
+
+        int helperLocalIdx = -1;
+        for (int i = 0; i < pSrc->numbones; i++) {
+            if (!stricmp(pSrc->localBone[i].name, helperBoneNames[h])) {
+                helperLocalIdx = i;
+                break;
+            }
+        }
+        if (helperLocalIdx < 0) {
+            MdlWarning("$driverbone: helper bone '%s' not found in '%s'; skipping\n",
+                       helperBoneNames[h], triggerPoseFile);
+            continue;
+        }
+
+        pBone->unlockbones  = unlockBones;
+        pBone->numtriggers  = allTriggers.Count();
+
+        // For unlockbones: store delta relative to the triggerpose bind pose (frame 0).
+        // simplify.cpp will add the actual skeleton bind pose on top.
+        // For normal mode: store absolute pos/quat from the triggerpose frame.
+        Quaternion bindQuatTP;
+        Vector     bindPosTP(0.0f, 0.0f, 0.0f);
+        if (unlockBones) {
+            s_bone_t *pBindFrame = (pAnim->rawanim.Count() > 0) ? pAnim->rawanim[0] : nullptr;
+            if (pBindFrame) {
+                AngleQuaternion(pBindFrame[helperLocalIdx].rot, bindQuatTP);
+                bindPosTP = pBindFrame[helperLocalIdx].pos;
+            } else {
+                bindQuatTP.Init(0.0f, 0.0f, 0.0f, 1.0f);
+            }
+        }
+
+        for (int t = 0; t < allTriggers.Count(); t++) {
+            int frame = max(0, min(allTriggers[t].frame, pAnim->numframes - 1));
+            pBone->tolerance[t] = DEG2RAD(allTriggers[t].toleranceDeg);
+
+            s_bone_t *pFrameBones = pAnim->rawanim[frame];
+            if (!pFrameBones) {
+                pBone->trigger[t].Init(0.0f, 0.0f, 0.0f, 1.0f);
+                pBone->quat[t].Init(0.0f, 0.0f, 0.0f, 1.0f);
+                pBone->pos[t].Init(0.0f, 0.0f, 0.0f);
+                continue;
+            }
+
+            AngleQuaternion(pFrameBones[driverLocalIdx].rot, pBone->trigger[t]);
+
+            if (unlockBones) {
+                // delta_quat = inv(bind) * frame  - rotation offset from triggerpose rest
+                Quaternion frameQuat, invBind;
+                AngleQuaternion(pFrameBones[helperLocalIdx].rot, frameQuat);
+                QuaternionInvert(bindQuatTP, invBind);
+                QuaternionMult(invBind, frameQuat, pBone->quat[t]);
+                // rawanim positions are already scaled; store delta from triggerpose bind pose
+                pBone->pos[t] = pFrameBones[helperLocalIdx].pos - bindPosTP;
+            } else {
+                AngleQuaternion(pFrameBones[helperLocalIdx].rot, pBone->quat[t]);
+                pBone->pos[t] = pFrameBones[helperLocalIdx].pos;
+            }
+        }
+
+        g_numquatinterpbones++;
+    }
+
+    if (!g_StudioMdlContext.quiet)
+        Msg("$driverbone '%s': %d helper bone(s), %d trigger(s)\n",
+            driverBoneName, numHelperBones, allTriggers.Count());
+}
+
+
+//-----------------------------------------------------------------------------
+// $driverlookat - inline aimatbone procedural look-at
+//
+// Syntax:
+//   $driverlookat <aim_target_bone_or_attachment> {
+//       [upvector  <x> <y> <z>]   // default: 1 0 0
+//       [aimvector <x> <y> <z>]   // default: 0 0 1
+//       [origin    <x> <y> <z>]   // offset the aim target (basepos)
+//       <helper_bone_name> ...
+//   }
+//
+// For each helper bone, one STUDIO_PROC_AIMATBONE (or AIMATATTACH) entry is
+// emitted. The parent bone is auto-derived from the skeleton hierarchy in
+// simplify.cpp, so it does not need to be specified manually.
+//-----------------------------------------------------------------------------
+
+void Cmd_DriverLookAt() {
+    char aimTargetName[MAXSTUDIONAME];
+    GetToken(false);
+    Q_strncpy(aimTargetName, token, sizeof(aimTargetName));
+
+    Vector upVector (1.0f, 0.0f, 0.0f);
+    Vector aimVector(0.0f, 0.0f, 1.0f);
+    Vector origin   (0.0f, 0.0f, 0.0f);
+
+    int  numHelperBones = 0;
+    char helperBoneNames[MAXSTUDIOBONES][MAXSTUDIONAME];
+
+    GetToken(true);
+    if (stricmp(token, "{")) {
+        MdlError("$driverlookat: expected '{', got '%s'\n", token);
+        return;
+    }
+
+    while (GetToken(true)) {
+        if (!stricmp(token, "}"))
+            break;
+
+        if (!stricmp(token, "upvector")) {
+            GetToken(false); upVector.x = (float)atof(token);
+            GetToken(false); upVector.y = (float)atof(token);
+            GetToken(false); upVector.z = (float)atof(token);
+            VectorNormalize(upVector);
+        } else if (!stricmp(token, "aimvector")) {
+            GetToken(false); aimVector.x = (float)atof(token);
+            GetToken(false); aimVector.y = (float)atof(token);
+            GetToken(false); aimVector.z = (float)atof(token);
+            VectorNormalize(aimVector);
+        } else if (!stricmp(token, "origin")) {
+            GetToken(false); origin.x = (float)atof(token);
+            GetToken(false); origin.y = (float)atof(token);
+            GetToken(false); origin.z = (float)atof(token);
+        } else {
+            if (numHelperBones < MAXSTUDIOBONES) {
+                Q_strncpy(helperBoneNames[numHelperBones++], token, MAXSTUDIONAME);
+            } else {
+                MdlWarning("$driverlookat '%s': too many helper bones; ignoring '%s'\n",
+                           aimTargetName, token);
+            }
+        }
+    }
+
+    if (!numHelperBones) {
+        MdlWarning("$driverlookat '%s': no helper bones specified\n", aimTargetName);
+        return;
+    }
+
+    for (int h = 0; h < numHelperBones; h++) {
+        if (g_numaimatbones >= MAXSTUDIOBONES) {
+            MdlError("$driverlookat: aimatbone limit (%d) reached\n", MAXSTUDIOBONES);
+            return;
+        }
+
+        s_aimatbone_t *pAimAt = &g_aimatbones[g_numaimatbones];
+        memset(pAimAt, 0, sizeof(*pAimAt));
+
+        Q_strncpy(pAimAt->bonename,  helperBoneNames[h], MAXSTUDIONAME);
+        pAimAt->parentname[0] = '\0';  // auto-resolved from skeleton in simplify.cpp
+        Q_strncpy(pAimAt->aimname,   aimTargetName,      MAXSTUDIONAME);
+        pAimAt->aimvector = aimVector;
+        pAimAt->upvector  = upVector;
+        pAimAt->basepos   = origin * g_currentscale;
+        pAimAt->aimAttach = -1;
+        pAimAt->aimBone   = -1;
+        pAimAt->bone      = -1;
+        pAimAt->parent    = -1;
+
+        g_numaimatbones++;
+    }
+
+    if (!g_StudioMdlContext.quiet)
+        Msg("$driverlookat '%s': %d bone(s) registered\n", aimTargetName, numHelperBones);
+}
+
+
 //
 // This is the master list of the commands a QC file supports.
 // To add a new command to the QC files, add it here.
@@ -7064,6 +7705,9 @@ MDLCommand_t g_Commands[] =
                 {"$erroronsequenceremappingfailure", Cmd_ErrorOnSeqRemapFail,},
                 {"$modelhasnosequences",             Cmd_SetModelIntentionallyHasZeroSequences,},
                 {"$contentrootrelative",             Cmd_ContentRootRelative,},
+                {"$rendermesh",                       Cmd_RenderMesh,},
+                {"$driverbone",                       Cmd_DriverBone,},
+                {"$driverlookat",                     Cmd_DriverLookAt,},
         };
 
 int g_nMDLCommandCount = ARRAYSIZE(g_Commands);
