@@ -1310,6 +1310,7 @@ struct s_aimatbone_t {
     Vector aimvector;
     Vector upvector;
     Vector basepos;
+    bool autobasepos; // true: seed basepos from skeleton rest pose in TagProceduralBones
 };
 
 EXTERN int g_numaimatbones;

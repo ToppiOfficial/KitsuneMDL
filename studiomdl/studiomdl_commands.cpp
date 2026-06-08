@@ -7568,7 +7568,8 @@ void Cmd_DriverLookAt() {
         Q_strncpy(pAimAt->aimname,   aimTargetName,      MAXSTUDIONAME);
         pAimAt->aimvector = aimVector;
         pAimAt->upvector  = upVector;
-        pAimAt->basepos   = origin * g_currentscale;
+        pAimAt->basepos     = origin * g_currentscale;
+        pAimAt->autobasepos = true;
         pAimAt->aimAttach = -1;
         pAimAt->aimBone   = -1;
         pAimAt->bone      = -1;

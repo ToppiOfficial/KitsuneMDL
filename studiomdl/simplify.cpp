@@ -4475,6 +4475,10 @@ void TagProceduralBones() {
             g_aimatbones[j].parent = g_bonetable[g_aimatbones[j].bone].parent;
         }
 
+        // $driverlookat: seed basepos from skeleton rest-pose; QC 'origin' is additive on top
+        if (g_aimatbones[j].autobasepos)
+            g_aimatbones[j].basepos += g_bonetable[g_aimatbones[j].bone].pos;
+
         // Look for the aim bone as an attachment first
 
         g_aimatbones[j].aimAttach = -1;
