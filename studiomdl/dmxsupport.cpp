@@ -30,6 +30,7 @@
 // Local includes
 #include "studiomdl/studiomdl.h"
 #include "tier1/fmtstr.h"
+#include "tier1/utldict.h"
 
 
 extern StudioMdlContext g_StudioMdlContext;
@@ -74,33 +75,43 @@ static void BuildDmeMeshFaceTracking(s_source_t *pSource) {
         faceSortMap[i] = i;
     qsort(faceSortMap.Base(), numFaces, sizeof(int), ReconstructFaceSortCompare);
 
-    // Build deduplicated DmeMesh name list
+    // Build deduplicated DmeMesh name list; dict maps name -> index in m_DmeMeshNames
     pSource->m_DmeMeshNames.RemoveAll();
+    CUtlDict<int16_t, int> meshNameToIdx(k_eDictCompareTypeCaseSensitive);
     for (int r = 0; r < s_DmeMeshFaceRanges.Count(); r++) {
         const char *name = s_DmeMeshFaceRanges[r].name;
-        bool found = false;
-        for (int j = 0; j < pSource->m_DmeMeshNames.Count(); j++) {
-            if (!Q_strcmp(pSource->m_DmeMeshNames[j], name)) { found = true; break; }
-        }
-        if (!found)
+        if (meshNameToIdx.Find(name) == meshNameToIdx.InvalidIndex()) {
+            int16_t idx = (int16_t)pSource->m_DmeMeshNames.Count();
+            meshNameToIdx.Insert(name, idx);
             pSource->m_DmeMeshNames.AddToTail(name);
+        }
     }
 
-    // Map each final face to its DmeMesh
+    // Map each final face to its DmeMesh.
+    // Ranges are built in face-load order so srcFaceStart is monotonically increasing -
+    // binary search to find which range contains each srcFaceIdx.
+    int numRanges = s_DmeMeshFaceRanges.Count();
     pSource->m_FaceDmeMeshIdx.SetSize(numFaces);
     for (int i = 0; i < numFaces; i++) {
         int srcFaceIdx = faceSortMap[i];
         int16_t meshIdx = -1;
-        for (int r = 0; r < s_DmeMeshFaceRanges.Count(); r++) {
-            if (srcFaceIdx >= s_DmeMeshFaceRanges[r].srcFaceStart &&
-                srcFaceIdx < s_DmeMeshFaceRanges[r].srcFaceEnd) {
-                const char *meshName = s_DmeMeshFaceRanges[r].name;
-                for (int j = 0; j < pSource->m_DmeMeshNames.Count(); j++) {
-                    if (!Q_strcmp(pSource->m_DmeMeshNames[j], meshName)) { meshIdx = (int16_t)j; break; }
-                }
+
+        int lo = 0, hi = numRanges - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >> 1;
+            const DmeMeshFaceRange_t &range = s_DmeMeshFaceRanges[mid];
+            if (srcFaceIdx < range.srcFaceStart)
+                hi = mid - 1;
+            else if (srcFaceIdx >= range.srcFaceEnd)
+                lo = mid + 1;
+            else {
+                int dictIdx = meshNameToIdx.Find(range.name);
+                if (dictIdx != meshNameToIdx.InvalidIndex())
+                    meshIdx = meshNameToIdx[dictIdx];
                 break;
             }
         }
+
         pSource->m_FaceDmeMeshIdx[i] = meshIdx;
     }
 }
@@ -315,7 +326,7 @@ static bool DefineUniqueVertices(CDmeVertexData *pBindState) {
 //-----------------------------------------------------------------------------
 static bool
 LoadVertices(CDmeDag *pDmeDag, CDmeVertexData *pBindState, const matrix3x4_t &mat, float flScale, int nBoneAssign,
-             int *pBoneRemap, s_source_t *pSource) {
+             int *pBoneRemap, s_source_t *pSource, const CUtlDict<int, int> &boneNameMap) {
     // nBoneAssign is only used if the mesh has no skinning information
     // It's the DMX bone index, but it might be < 0, in which case
     // no bone has been defined yet.  There are two options, use the
@@ -353,12 +364,9 @@ LoadVertices(CDmeDag *pDmeDag, CDmeVertexData *pBindState, const matrix3x4_t &ma
 
     if (nJointCount <= 0 && nBoneAssign == s_nDefaultRootNode && pDmeDag) {
         // Use the bone created for the DmeDag node of the DmeMesh
-        for (int i = 0; i < pSource->numbones; ++i) {
-            if (!Q_strcmp(pDmeDag->GetName(), pSource->localBone[i].name)) {
-                nBoneAssign = i;
-                break;
-            }
-        }
+        int dictIdx = boneNameMap.Find(pDmeDag->GetName());
+        if (dictIdx != boneNameMap.InvalidIndex())
+            nBoneAssign = boneNameMap[dictIdx];
     }
 
     bool pbWarnmap[MAXSTUDIOBONES];
@@ -703,7 +711,7 @@ static void ParseFaceData(CDmeVertexData *pVertexData, int material, int v1, int
 //-----------------------------------------------------------------------------
 static bool
 LoadMesh(CDmeDag *pDmeDag, CDmeMesh *pMesh, CDmeVertexData *pBindState, const matrix3x4_t &mat, float flScale,
-         int nBoneAssign, int *pBoneRemap, s_source_t *pSource) {
+         int nBoneAssign, int *pBoneRemap, s_source_t *pSource, const CUtlDict<int, int> &boneNameMap) {
     pMesh->CollapseRedundantNormals(normal_blend);
 
     // Load the vertices
@@ -717,7 +725,7 @@ LoadMesh(CDmeDag *pDmeDag, CDmeMesh *pMesh, CDmeVertexData *pBindState, const ma
     }
 
     // This defines s_UniqueVertices & s_UniqueVerticesMap
-    LoadVertices(pDmeDag, pBindState, mat, flScale, nBoneAssign, pBoneRemap, pSource);
+    LoadVertices(pDmeDag, pBindState, mat, flScale, nBoneAssign, pBoneRemap, pSource, boneNameMap);
 
     // Load the deltas
     int nDeltaStateCount = pMesh->DeltaStateCount();
@@ -819,6 +827,7 @@ struct LoadMeshInfo_t {
     float m_flScale;
     int *m_pBoneRemap;
     matrix3x4_t m_pBindPose[MAXSTUDIOSRCBONES];
+    CUtlDict<int, int> m_boneNameMap; // case-sensitive bone name -> localBone index, built once per source
 };
 
 static bool
@@ -850,7 +859,7 @@ LoadMeshes(const LoadMeshInfo_t &info, CDmeDag *pDag, const matrix3x4_t &parentT
 
         int nFacesBefore = g_StudioMdlContext.numfaces;
         if (!LoadMesh(pDag, pMesh, pBindState, dagToBindPose, info.m_flScale, nBoneAssign, info.m_pBoneRemap,
-                      info.m_pSource))
+                      info.m_pSource, info.m_boneNameMap))
             return false;
 
         DmeMeshFaceRange_t &range = s_DmeMeshFaceRanges[s_DmeMeshFaceRanges.AddToTail()];
@@ -884,6 +893,10 @@ static bool LoadMeshes(CDmeModel *pModel, float flScale, int *pBoneRemap, s_sour
     info.m_flScale = flScale;
     info.m_pBoneRemap = pBoneRemap;
     info.m_pSource = pSource;
+
+    // Build bone name -> localBone index map once for the whole DAG walk
+    for (int i = 0; i < pSource->numbones; ++i)
+        info.m_boneNameMap.Insert(pSource->localBone[i].name, i);
 
     CDmeTransformList *pBindPose = pModel->FindBaseState("bind");
     int nCount = pBindPose ? pBindPose->GetTransformCount() : pModel->GetJointCount();

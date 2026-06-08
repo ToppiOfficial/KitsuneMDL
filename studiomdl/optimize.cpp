@@ -37,6 +37,7 @@
 #include "tier1/utlvector.h"
 #include "materialsystem/imaterial.h"
 #include "tier1/utllinkedlist.h"
+#include "tier1/utldict.h"
 #include "tier1/smartptr.h"
 //#include "tier2/p4helpers.h"
 
@@ -163,49 +164,36 @@ namespace OptimizedModel {
     //-----------------------------------------------------------------------------
     class CStringTable {
     public:
+        CStringTable() : m_TotalSize(0), m_OffsetMap(k_eDictCompareTypeCaseInsensitive) {}
+
         int StringTableOffset(const char *string) {
-            int i;
-            int size = 0;
-            for (i = 0; i < m_Strings.Count(); i++) {
-                if (stricmp(m_Strings[i].Base(), string) == 0) {
-                    return size;
-                }
-                size += m_Strings[i].Count();
-            }
-            return -1;
+            int idx = m_OffsetMap.Find(string);
+            return (idx != m_OffsetMap.InvalidIndex()) ? m_OffsetMap[idx] : -1;
         }
 
         bool StringPresent(const char *string) {
-            int i;
-            for (i = 0; i < m_Strings.Count(); i++) {
-                if (stricmp(m_Strings[i].Base(), string) == 0) {
-                    return true;
-                }
-            }
-            return false;
+            return m_OffsetMap.Find(string) != m_OffsetMap.InvalidIndex();
         }
 
         void AddString(const char *newString) {
-            if (StringPresent(newString)) {
+            if (StringPresent(newString))
                 return;
-            }
+            m_OffsetMap.Insert(newString, m_TotalSize);
             CUtlVector<char> &s = m_Strings[m_Strings.AddToTail()];
             int size = strlen(newString) + 1;
             s.AddMultipleToTail(size);
             strcpy(s.Base(), newString);
+            m_TotalSize += size;
         }
 
         void Purge() {
             m_Strings.Purge();
+            m_OffsetMap.Purge();
+            m_TotalSize = 0;
         }
 
         int CalcSize() {
-            int size = 0;
-            int i;
-            for (i = 0; i < m_Strings.Count(); i++) {
-                size += m_Strings[i].Count();
-            }
-            return size;
+            return m_TotalSize;
         }
 
         void WriteToMem(char *pDst) {
@@ -225,6 +213,8 @@ namespace OptimizedModel {
     private:
         typedef CUtlVector<char> CharVector_t;
         CUtlVector<CharVector_t> m_Strings;
+        CUtlDict<int, int> m_OffsetMap;
+        int m_TotalSize;
     };
 
     // global string table for the whole vtx file.
