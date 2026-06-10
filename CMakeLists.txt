@@ -41,7 +41,7 @@ add_subdirectory(libs/interfaces)
 add_subdirectory(libs/filesystem)
 
 
-add_executable(studiomdl_v2
+add_executable(kitsunemdl
         studiomdl/dmxsupport.cpp
         studiomdl/mrmsupport.cpp
         studiomdl/v1support.cpp
@@ -64,9 +64,9 @@ add_executable(studiomdl_v2
         studiomdl/collisionmodelsource.cpp
         studiomdl/studiomdl_app.h
 )
-target_compile_definitions(studiomdl_v2 PRIVATE -DSTATIC_TIER0)
-target_include_directories(studiomdl_v2 PUBLIC include)
-target_link_libraries(studiomdl_v2 PRIVATE
+target_compile_definitions(kitsunemdl PRIVATE -DSTATIC_TIER0)
+target_include_directories(kitsunemdl PUBLIC include)
+target_link_libraries(kitsunemdl PRIVATE
         tier0
         tier1
         tier2
@@ -85,19 +85,3 @@ target_link_libraries(studiomdl_v2 PRIVATE
         filesystem_stdio_v2_static
         )
 
-add_executable(dmxconvert
-        dmxconvert/dmxconvert.cpp
-        studiomdl/filesystem_init.cpp
-        )
-target_compile_definitions(dmxconvert PRIVATE -DSTATIC_TIER0)
-target_include_directories(dmxconvert PUBLIC include)
-target_link_libraries(dmxconvert PRIVATE
-        tier0
-        tier1
-        tier2
-        mathlib
-        appframework
-        datamodel
-        dmserializers
-        filesystem_stdio_v2_static
-        )

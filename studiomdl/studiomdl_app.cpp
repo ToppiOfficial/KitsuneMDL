@@ -17,6 +17,7 @@
 #include "appframework/AppFramework.h"
 #include "studiomdl/perfstats.h"
 #include "datamodel/idatamodel.h"
+#include "datamodel/dmelement.h"
 #include "dmserializers/idmserializers.h"
 #include "mdllib/mdllib.h"
 #include "filesystem/filesystem_stdio.h"
@@ -696,6 +697,64 @@ void UsageAndExit() {
 //-----------------------------------------------------------------------------
 // The application object
 //-----------------------------------------------------------------------------
+static int RunEmbeddedDmxConvert() {
+    MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f, false, false, false, false);
+    g_pDataModel->OnlyCreateUntypedElements(true);
+    g_pDataModel->SetDefaultElementFactory(nullptr);
+
+    g_pFullFileSystem->AddSearchPath("", "LOCAL", PATH_ADD_TO_HEAD);
+
+    const char *pInFileName  = CommandLine()->ParmValue("-i");
+    const char *pOutFileName = CommandLine()->ParmValue("-o");
+    const char *pInFormat    = CommandLine()->ParmValue("-if");
+    const char *pOutFormat   = CommandLine()->ParmValue("-of");
+    const char *pOutEncoding = CommandLine()->ParmValue("-oe");
+
+    if (!pInFileName) {
+        Msg("Usage: studiomdl_v2 -dmxconvert -i <in file> [-if <in format_hint>] [-o <out file>] [-oe <out encoding>] [-of <out format>]\n");
+        Msg("If no output file is specified, dmx to dmx conversion will overwrite the input\n");
+        Msg("Supported DMX file encodings:\n");
+        for (int i = 0; i < g_pDataModel->GetEncodingCount(); ++i)
+            Msg("   %s\n", g_pDataModel->GetEncodingName(i));
+        Msg("Supported DMX file formats:\n");
+        for (int i = 0; i < g_pDataModel->GetFormatCount(); ++i)
+            Msg("   %s\n", g_pDataModel->GetFormatName(i));
+        return -1;
+    }
+
+    DmxHeader_t header;
+    CDmElement *pRoot;
+    if (g_pDataModel->RestoreFromFile(pInFileName, nullptr, pInFormat, &pRoot, CR_DELETE_NEW, &header) == DMFILEID_INVALID) {
+        Error("Encountered an error reading file \"%s\"!\n", pInFileName);
+        return -1;
+    }
+
+    if (!pOutFormat) {
+        pOutFormat = header.formatName;
+        if (!g_pDataModel->FindFormatUpdater(pOutFormat))
+            pOutFormat = "dmx";
+    }
+
+    if (!pOutEncoding) {
+        pOutEncoding = g_pDataModel->GetDefaultEncoding(pOutFormat);
+        if (!pOutEncoding) {
+            pOutFormat   = GENERIC_DMX_FORMAT;
+            pOutEncoding = g_pDataModel->GetDefaultEncoding(pOutFormat);
+        }
+    }
+
+    if (!pOutFileName)
+        pOutFileName = pInFileName;
+
+    if (!g_pDataModel->SaveToFile(pOutFileName, nullptr, pOutEncoding, pOutFormat, pRoot)) {
+        Error("Encountered an error writing file \"%s\"!\n", pOutFileName);
+        return -1;
+    }
+
+    g_pDataModel->RemoveFileId(pRoot->GetFileId());
+    return 0;
+}
+
 int CStudioMDLApp::Main() {
     g_StudioMdlContext.numverts = g_StudioMdlContext.numnormals = g_StudioMdlContext.numfaces = 0;
     for (int &g_numtexcoord: g_StudioMdlContext.numtexcoords) {
@@ -704,6 +763,9 @@ int CStudioMDLApp::Main() {
 
     // This bit of hackery allows us to access files on the harddrive
     g_pFullFileSystem->AddSearchPath("", "LOCAL", PATH_ADD_TO_HEAD);
+
+    if (CommandLine()->FindParm("-dmxconvert"))
+        return RunEmbeddedDmxConvert();
 
     int nReturnValue;
     if (HandleMdlReport(nReturnValue))
