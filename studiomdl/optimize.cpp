@@ -312,7 +312,7 @@ namespace OptimizedModel {
                                   StripGroup_t *pStripGroup);
 
         void BuildHWSkinnedStrips(FaceList_t &faceList, VertexList_t &verts, StripGroup_t *pStripGroup,
-                                  int maxBonesPerStrip);
+                                  int maxBonesPerStrip, mstudiomesh_t *pStudioMesh = nullptr);
 
         // These methods deal with finding another face to batch together
         // in a similar matrix state group
@@ -788,8 +788,8 @@ namespace OptimizedModel {
         if (ppTopologyIndices)
             *ppTopologyIndices = NULL;
 
-        // Skip the tristripping phase if we're building in preview mode, rendering quads or not hardware skinning
-        if (bQuadSubd || g_StudioMdlContext.buildPreview || !bIsHWSkinned || g_StudioMdlContext.preserveTriangleOrder) {
+        // Skip the tristripping phase if we're building in preview mode, rendering quads, or preserving order
+        if (bQuadSubd || g_StudioMdlContext.buildPreview || g_StudioMdlContext.preserveTriangleOrder) {
             *pNumIndices = sourceIndices.Count();
             *ppIndices = new unsigned short[*pNumIndices];
             memcpy(*ppIndices, sourceIndices.Base(), (*pNumIndices) * sizeof(unsigned short));
@@ -909,7 +909,7 @@ namespace OptimizedModel {
     // Processes a HW-skinned strip group
     //-----------------------------------------------------------------------------
     void COptimizedModel::BuildHWSkinnedStrips(FaceList_t &faceList, VertexList_t &vertices, StripGroup_t *pStripGroup,
-                                               int maxBonesPerStrip) {
+                                               int maxBonesPerStrip, mstudiomesh_t *pStudioMesh) {
         // Set up the hardware matrix state
         m_HardwareMatrixState.Init(maxBonesPerStrip);
 
@@ -954,6 +954,33 @@ namespace OptimizedModel {
             // NOTE: This allocates space for stripIndices.pIndices
             Stripify(facesToStrip, IndexTopologyList_t(), true, &newStrip.numIndices, 0, &newStrip.pIndices, NULL,
                      numVerts == 4);
+
+            // Reduce pixel overdraw by reordering triangles while keeping ACMR within 5% of the cache-optimized result.
+            // Quads are skipped; topology indices would need matching reordering which Stripify already bypasses above.
+            if (newStrip.numIndices > 0 && pStudioMesh && !(newStrip.flags & (STRIP_IS_QUADLIST_EXTRA | STRIP_IS_QUADLIST_REG))) {
+                const mstudio_meshvertexdata_t *vertData = pStudioMesh->GetVertexData();
+                int nVerts = vertices.Count();
+
+                CUtlVector<float> positions;
+                positions.SetSize(nVerts * 3);
+                for (int vi = 0; vi < nVerts; vi++) {
+                    Vector *pPos = vertData->Position(vertices[vi].origMeshVertID);
+                    positions[vi * 3 + 0] = pPos->x;
+                    positions[vi * 3 + 1] = pPos->y;
+                    positions[vi * 3 + 2] = pPos->z;
+                }
+
+                CUtlVector<unsigned int> indices32;
+                indices32.SetSize(newStrip.numIndices);
+                for (int ii = 0; ii < newStrip.numIndices; ii++)
+                    indices32[ii] = newStrip.pIndices[ii];
+
+                meshopt_optimizeOverdraw(indices32.Base(), indices32.Base(), (size_t)newStrip.numIndices,
+                                         positions.Base(), (size_t)nVerts, sizeof(float) * 3, 1.05f);
+
+                for (int ii = 0; ii < newStrip.numIndices; ii++)
+                    newStrip.pIndices[ii] = (unsigned short)indices32[ii];
+            }
 
             // hack - should just build directly into newStrip.verts instead of using a global.
             for (int i = 0; i < vertices.Count(); i++) {
@@ -1779,7 +1806,7 @@ namespace OptimizedModel {
 
         // Build the actual strips
         if (bIsHWSkinned) {
-            BuildHWSkinnedStrips(stripGroupSourceFaces, stripGroupVertices, pStripGroup, maxBonesPerStrip);
+            BuildHWSkinnedStrips(stripGroupSourceFaces, stripGroupVertices, pStripGroup, maxBonesPerStrip, pStudioMesh);
         } else {
             BuildSWSkinnedStrips(stripGroupSourceFaces, stripGroupSubDFaces, stripGroupVertices, pStripGroup);
         }

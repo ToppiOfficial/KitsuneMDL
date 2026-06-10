@@ -54,6 +54,7 @@ A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](
 - New `$include` optional inline parameters:
   - `iffileexist` checks if file exist, if it doesn't then silently pass and ingore.  Does not stop the compile.
   - `nofallbackdir` doesn't use `-includedir` fallback
+- `$model` can now be used inside `$bodygroup` blocks, allowing named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.txt`.
 - Recreated some features from StudioMDL++ and NekoMDL:
   - `-cullanims` flag to strip unreferenced `$animation` blocks
   - Bone weight cull threshold reduced from 5% to 0.01%

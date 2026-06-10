@@ -495,6 +495,8 @@ int Option_Blank() {
     return 0;
 }
 
+void Option_Model(int imodel); // forward declaration - defined near Cmd_Model
+
 void Cmd_Bodygroup() {
     int is_started = 0;
 
@@ -529,6 +531,25 @@ void Cmd_Bodygroup() {
             g_nummodels++;
         } else if (stricmp("blank", token) == 0) {
             Option_Blank();
+        } else if (stricmp("$model", token) == 0) {
+            if (!GetToken(false))
+                MdlError("$model inside $bodygroup: expected model name\n");
+            g_model[g_nummodels] = (s_model_t *) calloc(1, sizeof(s_model_t));
+            strcpyn(g_model[g_nummodels]->name, token);
+
+            g_bodypart[g_numbodyparts].pmodel[g_bodypart[g_numbodyparts].nummodels] = g_model[g_nummodels];
+            g_bodypart[g_numbodyparts].nummodels++;
+
+            Option_Studio(g_model[g_nummodels]);
+
+            if (g_model[g_nummodels]->source) {
+                AddBodyFlexData(g_model[g_nummodels]->source, g_nummodels);
+                AddBodyAttachments(g_model[g_nummodels]->source);
+            }
+
+            Option_Model(g_nummodels);
+
+            g_nummodels++;
         } else {
             MdlError("unknown bodygroup option: \"%s\"\n", token);
         }
@@ -700,6 +721,14 @@ void AddBodyAttachments(s_source_t *pSource) {
 
 #endif
 
+static int FindFlexControllerByName(const char *name) {
+    for (int i = 0; i < g_numflexcontrollers; ++i) {
+        if (!Q_stricmp(g_flexcontroller[i].name, name))
+            return i;
+    }
+    return -1;
+}
+
 //-----------------------------------------------------------------------------
 // Adds flex controller data to a particular source
 //-----------------------------------------------------------------------------
@@ -762,100 +791,129 @@ void AddFlexControllers(
             memcpy(pTemp, "right_", 6);
             pTemp[nLen + 6] = '\0';
 
-            remapControl.m_RightIndex = g_numflexcontrollers;
-            r2i[i] = g_numflexcontrollers;
-            pController = &g_flexcontroller[g_numflexcontrollers++];
-            Q_strncpy(pController->name, pTemp, sizeof(pController->name));
-            Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
-
-            if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
-                remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
-                pController->min = -1.0f;
-                pController->max = 1.0f;
-            } else {
-                pController->min = 0.0f;
-                pController->max = 1.0f;
+            {
+                int existing = FindFlexControllerByName(pTemp);
+                if (existing >= 0) {
+                    remapControl.m_RightIndex = existing;
+                    r2i[i] = existing;
+                } else {
+                    remapControl.m_RightIndex = g_numflexcontrollers;
+                    r2i[i] = g_numflexcontrollers;
+                    pController = &g_flexcontroller[g_numflexcontrollers++];
+                    Q_strncpy(pController->name, pTemp, sizeof(pController->name));
+                    Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
+                    if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
+                        remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
+                        pController->min = -1.0f;
+                        pController->max = 1.0f;
+                    } else {
+                        pController->min = 0.0f;
+                        pController->max = 1.0f;
+                    }
+                }
             }
 
             memcpy(pTemp + 5, remapControl.m_Name.Get(), nLen + 1);
             memcpy(pTemp, "left_", 5);
             pTemp[nLen + 5] = '\0';
 
-            remapControl.m_LeftIndex = g_numflexcontrollers;
-            l2i[i] = g_numflexcontrollers;
-            pController = &g_flexcontroller[g_numflexcontrollers++];
-            Q_strncpy(pController->name, pTemp, sizeof(pController->name));
-            Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
-
-            if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
-                remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
-                pController->min = -1.0f;
-                pController->max = 1.0f;
-            } else {
-                pController->min = 0.0f;
-                pController->max = 1.0f;
+            {
+                int existing = FindFlexControllerByName(pTemp);
+                if (existing >= 0) {
+                    remapControl.m_LeftIndex = existing;
+                    l2i[i] = existing;
+                } else {
+                    remapControl.m_LeftIndex = g_numflexcontrollers;
+                    l2i[i] = g_numflexcontrollers;
+                    pController = &g_flexcontroller[g_numflexcontrollers++];
+                    Q_strncpy(pController->name, pTemp, sizeof(pController->name));
+                    Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
+                    if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
+                        remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
+                        pController->min = -1.0f;
+                        pController->max = 1.0f;
+                    } else {
+                        pController->min = 0.0f;
+                        pController->max = 1.0f;
+                    }
+                }
             }
         } else {
-            // See if we can add one more flex controller
-            if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
-                MdlError("Line %d: Too many flex controllers, max %d, cannot add control %s from source %s",
-                         g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXCTRL, remapControl.m_Name.Get(), pSource->filename);
+            {
+                int existing = FindFlexControllerByName(remapControl.m_Name.Get());
+                if (existing >= 0) {
+                    remapControl.m_Index = existing;
+                    r2i[i] = existing;
+                    l2i[i] = existing;
+                } else {
+                    // See if we can add one more flex controller
+                    if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
+                        MdlError("Line %d: Too many flex controllers, max %d, cannot add control %s from source %s",
+                                 g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXCTRL, remapControl.m_Name.Get(), pSource->filename);
 
-            remapControl.m_Index = g_numflexcontrollers;
-            r2i[i] = g_numflexcontrollers;
-            l2i[i] = g_numflexcontrollers;
-            s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
-            Q_strncpy(pController->name, remapControl.m_Name.Get(), sizeof(pController->name));
-            Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? remapControl.m_Name.Get() : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
+                    remapControl.m_Index = g_numflexcontrollers;
+                    r2i[i] = g_numflexcontrollers;
+                    l2i[i] = g_numflexcontrollers;
+                    s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
+                    Q_strncpy(pController->name, remapControl.m_Name.Get(), sizeof(pController->name));
+                    Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? remapControl.m_Name.Get() : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
 
-            if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
-                remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
-                pController->min = -1.0f;
-                pController->max = 1.0f;
-            } else {
-                pController->min = 0.0f;
-                pController->max = 1.0f;
+                    if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
+                        remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
+                        pController->min = -1.0f;
+                        pController->max = 1.0f;
+                    } else {
+                        pController->min = 0.0f;
+                        pController->max = 1.0f;
+                    }
+                }
             }
         }
 
         if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_NWAY ||
             remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
-            if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
-                MdlError(
-                        "Line %d: Too many flex controllers, max %d, cannot add value control for nWay %s from source %s",
-                        g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXCTRL, remapControl.m_Name.Get(), pSource->filename);
-
-            remapControl.m_MultiIndex = g_numflexcontrollers;
-            s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
             const int nLen = remapControl.m_Name.Length();
             char *pTemp = (char *) _alloca(nLen + 6 + 1); // 'multi_' + 1 for the NULL
-
             memcpy(pTemp, "multi_", 6);
             memcpy(pTemp + 6, remapControl.m_Name.Get(), nLen + 1);
             pTemp[nLen + 6] = '\0';
-            Q_strncpy(pController->name, pTemp, sizeof(pController->name));
-            Q_strncpy(pController->type, pTemp, sizeof(pController->type));
 
-            pController->min = -1.0f;
-            pController->max = 1.0f;
+            int existing = FindFlexControllerByName(pTemp);
+            if (existing >= 0) {
+                remapControl.m_MultiIndex = existing;
+            } else {
+                if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
+                    MdlError(
+                            "Line %d: Too many flex controllers, max %d, cannot add value control for nWay %s from source %s",
+                            g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXCTRL, remapControl.m_Name.Get(), pSource->filename);
+
+                remapControl.m_MultiIndex = g_numflexcontrollers;
+                s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
+                Q_strncpy(pController->name, pTemp, sizeof(pController->name));
+                Q_strncpy(pController->type, pTemp, sizeof(pController->type));
+                pController->min = -1.0f;
+                pController->max = 1.0f;
+            }
         }
 
         if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
             // Make a blink controller
+            int existing = FindFlexControllerByName("blink");
+            if (existing >= 0) {
+                remapControl.m_BlinkController = existing;
+            } else {
+                if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
+                    MdlError(
+                            "Line %d: Too many flex controllers, max %d, cannot add value control for nWay %s from source %s",
+                            g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXCTRL, remapControl.m_Name.Get(), pSource->filename);
 
-            if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
-                MdlError(
-                        "Line %d: Too many flex controllers, max %d, cannot add value control for nWay %s from source %s",
-                        g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXCTRL, remapControl.m_Name.Get(), pSource->filename);
-
-            remapControl.m_BlinkController = g_numflexcontrollers;
-            s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
-
-            Q_strncpy(pController->name, "blink", sizeof(pController->name));
-            Q_strncpy(pController->type, "blink", sizeof(pController->type));
-
-            pController->min = 0.0f;
-            pController->max = 1.0f;
+                remapControl.m_BlinkController = g_numflexcontrollers;
+                s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
+                Q_strncpy(pController->name, "blink", sizeof(pController->name));
+                Q_strncpy(pController->type, "blink", sizeof(pController->type));
+                pController->min = 0.0f;
+                pController->max = 1.0f;
+            }
         }
     }
 
@@ -1444,15 +1502,18 @@ void Option_Flexcontroller(s_model_t *pmodel) {
             GetToken(false);
             range_max = verify_atof(token);
         } else {
-            if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL) {
-                TokenError("Too many flex controllers, max %d\n", MAXSTUDIOFLEXCTRL);
+            int existing = FindFlexControllerByName(token);
+            if (existing >= 0) {
+                MdlWarning("Flex controller '%s' already defined, reusing existing entry\n", token);
+            } else {
+                if (g_numflexcontrollers >= MAXSTUDIOFLEXCTRL)
+                    TokenError("Too many flex controllers, max %d\n", MAXSTUDIOFLEXCTRL);
+                strcpyn(g_flexcontroller[g_numflexcontrollers].name, token);
+                strcpyn(g_flexcontroller[g_numflexcontrollers].type, type);
+                g_flexcontroller[g_numflexcontrollers].min = range_min;
+                g_flexcontroller[g_numflexcontrollers].max = range_max;
+                g_numflexcontrollers++;
             }
-
-            strcpyn(g_flexcontroller[g_numflexcontrollers].name, token);
-            strcpyn(g_flexcontroller[g_numflexcontrollers].type, type);
-            g_flexcontroller[g_numflexcontrollers].min = range_min;
-            g_flexcontroller[g_numflexcontrollers].max = range_max;
-            g_numflexcontrollers++;
         }
     }
 
@@ -2337,6 +2398,95 @@ void Option_Eyelid(int imodel) {
     }
 }
 
+void Option_Model(int imodel) {
+    int depth = 0;
+    while (1) {
+        char FAC[256], vtafile[256];
+        if (depth > 0) {
+            if (!GetToken(true))
+                break;
+        } else {
+            if (!TokenAvailable())
+                break;
+            else
+                GetToken(false);
+        }
+
+        if (endofscript) {
+            if (depth != 0)
+                TokenError("missing }\n");
+            return;
+        }
+        if (!Q_stricmp("{", token)) {
+            depth++;
+        } else if (!Q_stricmp("}", token)) {
+            depth--;
+        } else if (!Q_stricmp("eyeball", token)) {
+            Option_Eyeball(g_model[imodel]);
+        } else if (!Q_stricmp("eyelid", token)) {
+            Option_Eyelid(imodel);
+        } else if (!Q_stricmp("dmxeyelid", token)) {
+            Option_DmxEyelid(imodel);
+        } else if (!V_stricmp("vcafile", token)) {
+            GetToken(false);
+            Option_VertexCacheAnimationFile(token, imodel);
+        } else if (!Q_stricmp("flex", token)) {
+            GetToken(false);
+            strcpy(FAC, token);
+            if (depth == 0) {
+                GetToken(false);
+                strcpy(vtafile, token);
+            }
+            Option_Flex(FAC, vtafile, imodel, 0.0);
+        } else if (!Q_stricmp("flexpair", token)) {
+            GetToken(false);
+            strcpy(FAC, token);
+            GetToken(false);
+            float split = atof(token);
+            if (depth == 0) {
+                GetToken(false);
+                strcpy(vtafile, token);
+            }
+            Option_Flex(FAC, vtafile, imodel, split);
+        } else if (!Q_stricmp("defaultflex", token)) {
+            if (depth == 0) {
+                GetToken(false);
+                strcpy(vtafile, token);
+            }
+            Option_Flex("default", vtafile, imodel, 0.0);
+            g_defaultflexkey = &g_flexkey[g_numflexkeys - 1];
+        } else if (!Q_stricmp("flexfile", token)) {
+            GetToken(false);
+            strcpy(vtafile, token);
+        } else if (!Q_stricmp("localvar", token)) {
+            while (TokenAvailable()) {
+                GetToken(false);
+                Add_Flexdesc(token);
+            }
+        } else if (!Q_stricmp("mouth", token)) {
+            Option_Mouth(g_model[imodel]);
+        } else if (!Q_stricmp("flexcontroller", token)) {
+            Option_Flexcontroller(g_model[imodel]);
+        } else if (token[0] == '%') {
+            Option_Flexrule(g_model[imodel], &token[1]);
+        } else if (!Q_stricmp("attachment", token)) {
+            // Option_Attachment( g_model[imodel] );
+        } else if (!Q_stricmp(token, "spherenormals")) {
+            Option_Spherenormals(g_model[imodel]->source);
+        } else if (!Q_stricmp(token, "noautodmxrules")) {
+            Option_NoAutoDMXRules(g_model[imodel]->source);
+        } else {
+            TokenError("unknown model option \"%s\"\n", token);
+        }
+
+        if (depth < 0)
+            TokenError("missing {\n");
+    }
+
+    if (g_model[imodel]->source && !g_model[imodel]->source->bNoAutoDMXRules)
+        AddBodyFlexRules(g_model[imodel]->source);
+}
+
 void Cmd_Model() {
     g_model[g_nummodels] = (s_model_t *) calloc(1, sizeof(s_model_t));
 
@@ -2365,110 +2515,7 @@ void Cmd_Model() {
         AddBodyAttachments(g_model[g_nummodels]->source);
     }
 
-    int depth = 0;
-    while (1) {
-        char FAC[256], vtafile[256];
-        if (depth > 0) {
-            if (!GetToken(true))
-                break;
-        } else {
-            if (!TokenAvailable()) {
-                break;
-            } else {
-                GetToken(false);
-            }
-        }
-
-        if (endofscript) {
-            if (depth != 0) {
-                TokenError("missing }\n");
-            }
-            return;
-        }
-        if (!Q_stricmp("{", token)) {
-            depth++;
-        } else if (!Q_stricmp("}", token)) {
-            depth--;
-        } else if (!Q_stricmp("eyeball", token)) {
-            Option_Eyeball(g_model[g_nummodels]);
-        } else if (!Q_stricmp("eyelid", token)) {
-            Option_Eyelid(g_nummodels);
-        } else if (!Q_stricmp("dmxeyelid", token)) {
-            Option_DmxEyelid(g_nummodels);
-        } else if (!V_stricmp("vcafile", token)) {
-            // vertex cache animation file
-            GetToken(false);    // file
-            Option_VertexCacheAnimationFile(token, g_nummodels);
-        } else if (!Q_stricmp("flex", token)) {
-            // g_flex
-            GetToken(false);
-            strcpy(FAC, token);
-            if (depth == 0) {
-                // file
-                GetToken(false);
-                strcpy(vtafile, token);
-            }
-            Option_Flex(FAC, vtafile, g_nummodels, 0.0); // FIXME: this needs to point to a model used, not loaded!!!
-        } else if (!Q_stricmp("flexpair", token)) {
-            // g_flex
-            GetToken(false);
-            strcpy(FAC, token);
-
-            GetToken(false);
-            float split = atof(token);
-
-            if (depth == 0) {
-                // file
-                GetToken(false);
-                strcpy(vtafile, token);
-            }
-            Option_Flex(FAC, vtafile, g_nummodels, split); // FIXME: this needs to point to a model used, not loaded!!!
-        } else if (!Q_stricmp("defaultflex", token)) {
-            if (depth == 0) {
-                // file
-                GetToken(false);
-                strcpy(vtafile, token);
-            }
-
-            // g_flex
-            Option_Flex("default", vtafile, g_nummodels,
-                        0.0); // FIXME: this needs to point to a model used, not loaded!!!
-            g_defaultflexkey = &g_flexkey[g_numflexkeys - 1];
-        } else if (!Q_stricmp("flexfile", token)) {
-            // file
-            GetToken(false);
-            strcpy(vtafile, token);
-        } else if (!Q_stricmp("localvar", token)) {
-            while (TokenAvailable()) {
-                GetToken(false);
-                Add_Flexdesc(token);
-            }
-        } else if (!Q_stricmp("mouth", token)) {
-            Option_Mouth(g_model[g_nummodels]);
-        } else if (!Q_stricmp("flexcontroller", token)) {
-            Option_Flexcontroller(g_model[g_nummodels]);
-        } else if (token[0] == '%') {
-            Option_Flexrule(g_model[g_nummodels], &token[1]);
-        } else if (!Q_stricmp("attachment", token)) {
-            // 	Option_Attachment( g_model[g_nummodels] );
-        } else if (!Q_stricmp(token, "spherenormals")) {
-            Option_Spherenormals(g_model[g_nummodels]->source);
-        } else if (!Q_stricmp(token, "noautodmxrules")) {
-            Option_NoAutoDMXRules(g_model[g_nummodels]->source);
-        } else {
-            TokenError("unknown model option \"%s\"\n", token);
-        }
-
-        if (depth < 0) {
-            TokenError("missing {\n");
-        }
-    };
-
-    if (!g_model[g_nummodels]->source->bNoAutoDMXRules) {
-        // Actually connect up the expressions between the Dme Flex Controllers & Flex Descriptors
-        // In case there was data added by some other eyeball command (like eyelid)
-        AddBodyFlexRules(g_model[g_nummodels]->source);
-    }
+    Option_Model(g_nummodels);
 
     g_nummodels++;
 }
@@ -3397,7 +3444,7 @@ static void Cmd_RemoveMesh(LodScriptData_t &lodData) {
 }
 
 //-----------------------------------------------------------------------------
-// Parse generatelod command - auto-decimates the named model via meshoptimizer
+// Parse decimatemodel command - auto-decimates the named model via meshoptimizer
 //-----------------------------------------------------------------------------
 
 static void Cmd_GenerateLod(LodScriptData_t &lodData) {
@@ -3412,19 +3459,19 @@ static void Cmd_GenerateLod(LodScriptData_t &lodData) {
 
     // decimation factor: 1.0 = full detail, 0.5 = 50% triangles
     if (!TokenAvailable()) {
-        MdlError("generatelod: expected decimation factor after model name (%d) : %s\n",
+        MdlError("decimatemodel: expected decimation factor after model name (%d) : %s\n",
                  g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
     }
     GetToken(false);
     float factor = verify_atof(token);
     if (factor <= 0.0f || factor > 1.0f) {
-        MdlError("generatelod: decimation factor must be in range (0, 1.0] (%d) : %s\n",
+        MdlError("decimatemodel: decimation factor must be in range (0, 1.0] (%d) : %s\n",
                  g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
     }
     newEntry.m_flDecimationFactor = factor;
 
     if (lodData.IsStrippedFromModel() && !g_StudioMdlContext.quiet) {
-        printf("Stripped generatelod \"%s\" @ %.1f\n", newEntry.GetSrcName(), lodData.switchValue);
+        printf("Stripped decimatemodel \"%s\" @ %.1f\n", newEntry.GetSrcName(), lodData.switchValue);
     }
 }
 
@@ -3480,7 +3527,7 @@ void Cmd_LOD(const char *cmdname) {
         GetToken(true);
         if (stricmp("replacemodel", token) == 0) {
             Cmd_ReplaceModel(newLOD);
-        } else if (stricmp("generatelod", token) == 0) {
+        } else if (stricmp("decimatemodel", token) == 0) {
             Cmd_GenerateLod(newLOD);
         } else if (stricmp("removemodel", token) == 0) {
             Cmd_RemoveModel(newLOD);

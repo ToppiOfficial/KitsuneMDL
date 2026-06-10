@@ -1134,7 +1134,17 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
 
     int nTotalNewFaces = 0;
     float resultError = 0.0f;
-    int nGlobalVertCount = pSrc->m_GlobalVertices.Count();
+
+    // $rendermesh sources have m_GlobalVertices pre-populated by ApplyDmeMeshFilter, and
+    // mesh[].vertexoffset/numvertices are relative to that array. $model sources (e.g. face
+    // with flexes) have m_GlobalVertices empty at LoadLODSources time - RemapVerticesToGlobalBones
+    // fills it later. For those, vertex[] is always populated and mesh[] offsets are relative to it.
+    const s_vertexinfo_t *pVertBase = pSrc->m_GlobalVertices.Count() > 0
+        ? pSrc->m_GlobalVertices.Base()
+        : pSrc->vertex;
+    int nAvailVerts = pSrc->m_GlobalVertices.Count() > 0
+        ? pSrc->m_GlobalVertices.Count()
+        : pSrc->numvertices;
 
     unsigned int simplifyOptions = g_staticprop ? meshopt_SimplifyLockBorder : 0;
 
@@ -1142,7 +1152,7 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
         int matID = pSrc->meshindex[mi];
         const s_mesh_t &srcMesh = pSrc->mesh[matID];
 
-        if (srcMesh.numfaces == 0 || srcMesh.numvertices == 0 || nGlobalVertCount == 0)
+        if (srcMesh.numfaces == 0 || srcMesh.numvertices == 0 || nAvailVerts == 0)
             continue;
 
         // Skip meshes that will be removed by removemesh - no point decimating them
@@ -1152,7 +1162,7 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
         // Face indices are mesh-local (0..numvertices-1), so pass the mesh's own vertex slice.
         // s_vertexinfo_t has int material + int mesh before Vector position, so pass &position
         // with sizeof(s_vertexinfo_t) stride so meshoptimizer advances correctly.
-        const float *pMeshPositions = (const float *)&pSrc->m_GlobalVertices[srcMesh.vertexoffset].position;
+        const float *pMeshPositions = (const float *)&pVertBase[srcMesh.vertexoffset].position;
 
         int nSrcIndices = srcMesh.numfaces * 3;
         CUtlVector<unsigned int> srcIdx, dstIdx;
@@ -1205,7 +1215,7 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
     }
 
     if (!g_StudioMdlContext.quiet) {
-        printf("generatelod: %d -> %d faces (factor %.2f, error %.4f)\n",
+        printf("decimatemodel: %d -> %d faces (factor %.2f, error %.4f)\n",
                pSrc->numfaces, nTotalNewFaces, factor, resultError);
     }
 
@@ -1233,7 +1243,7 @@ static void GetLODSources(CUtlVector<s_source_t *> &lods, const s_model_t *pSrcM
         s_source_t *pSource = GetModelLODSource(pLookupName, scriptLOD, &bFound);
 
         if (!pSource && !bFound) {
-            // Check generatelod entries - decimate LOD0's geometry for this LOD level
+            // Check decimatemodel entries - decimate LOD0's geometry for this LOD level
             for (int j = 0; j < scriptLOD.generateLods.Count(); j++) {
                 char entryBuf[MAX_PATH];
                 const char *pEntryBase = GetModelBaseName(scriptLOD.generateLods[j].GetSrcName(), entryBuf);

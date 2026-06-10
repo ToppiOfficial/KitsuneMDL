@@ -1,5 +1,6 @@
 add_library(meshoptimizer
     vcacheoptimizer.cpp
+    overdrawoptimizer.cpp
     allocator.cpp
     simplifier.cpp
 )
