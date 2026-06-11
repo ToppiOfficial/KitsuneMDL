@@ -4,59 +4,67 @@
 
 A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
 
+Primarily tested with `DMX model 18`. Older versions may still work.
 
-`DMX model 18` but lower version can maybe still work
+## Known Issues
+
+> [!CAUTION]
+> **Mesh splitting is unreliable.** Splitting meshes that contain flex data may produce corrupted or completely broken results. Use with caution, especially on models with shape keys or flex controllers. Results can range from minor vertex errors to fully unusable output.
+
+> [!WARNING]
+> **Collision compile accuracy may vary.** The standalone `$collisionmodel` and `$collisionjoints` pipeline (which no longer requires vphysics.dll) is built from a combination of open-source references and reverse engineering. References used: [VPhysics-Jolt](https://github.com/misyltoad/VPhysics-Jolt), [Gmod-vphysics](https://github.com/DrChat/Gmod-vphysics), and [Valve Developer Wiki - VPhysics](https://developer.valvesoftware.com/wiki/VPhysics). Its output may not be fully consistent with what official Valve studiomdl produces. If you encounter incorrect physics shapes, unexpected behavior, or compilation differences, please report them as issues.
 
 ## TODO
 
-- ~~Remove the dependency for vphysics.dll (but still able to compile collisionjoints and collisionmodel) and dmxconvert.exe~~
-- ~~Explore the issue stated by REDxEYE about mesh split corrupting flex vertices.~~ (may not work well with the new lod system)
-- Further clean and remove "unused/dead code"
-- Improve the loading and fix some crashes when dealing with large SMD model
+- ~~Remove the dependency on vphysics.dll (while retaining `$collisionmodel` and `$collisionjoints` support) and dmxconvert.exe~~
+- ~~Investigate the mesh split issue reported by REDxEYE regarding corrupted flex vertices.~~ (see Known Issues above)
+- Further cleanup and removal of unused or dead code
+- ~~Improve stability when loading large SMD models~~
 
 ## Features
 
-- 64-bit with no dependencies
-- Increased some limit
-  - Bone limit 256 -> 1024
-  - Texture limit 32 -> 96
-  - Flex vertices limit 10000 -> 32768
-  - Mesh vertices limit 21845 -> 174762 (Overall model mesh limit: 65536 -> 524288)
+- 64-bit, no external dependencies
+- Increased limits:
+  - Bone limit: 256 -> 1024
+  - Texture limit: 32 -> 96
+  - Flex vertices limit: 10000 -> 32768
+  - Mesh vertices limit: 21845 -> 174762 (overall model mesh limit: 65536 -> 524288)
 - Replaced nvstrip with meshoptimizer
-- Minor code changes for faster compile
-- Change bone collapsing optimization behavior, Bone will not collapse if it is within this criteria:
-  - If bone is Jigglebone
-  - If bone is procedural bone/ driver bone
-  - If bone is $definebone
-  - If bone is $bonemerge
-  - If bone is BoneFlexDriver
-- `$definevariable` now work inside quotation but `$definemacro` does not.
-- Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch. (The minium is likely Team Fortress 2 or SourceSDK2013)
-- variables can now be defined outside of qc through `-defvar <var name> <value>` launch parameter. (can be repeated)
-- `$include` now has a fallback directory if it is not found on the specified path using the new launch parameter `-includedir <dir>`. (can be repeated)
-- Can compile for DirectX8 and can be opted out with `-nodx80` similar to StudioMDL++
-- `$addsearchdir` now works correctly for SMD/DMX source file lookup
+- Minor performance improvements to the compile pipeline
+- Revised bone collapsing behavior - a bone is preserved if any of the following apply:
+  - It is a Jigglebone
+  - It is a procedural or driver bone
+  - It is referenced by `$definebone`
+  - It is referenced by `$bonemerge`
+  - It is a BoneFlexDriver target
+- `$definevariable` now works inside quotation marks (`$definemacro` does not)
+- Multiple engine branch support; use `-newvtx` for the Alien Swarm to CS:GO engine branch (minimum supported branch is likely TF2 or SourceSDK2013)
+- Variables can be defined outside of QC via `-defvar <name> <value>` (repeatable)
+- `$include` supports a fallback search directory via `-includedir <dir>` (repeatable)
+- DirectX 8 compile support, opt-out with `-nodx80` (similar to StudioMDL++)
+- `$addsearchdir` now correctly applies to SMD/DMX source file lookup
 - New `ignorescale` parameter for `$animation` and `$sequence`
-- New `$driverbone` and `driverlookat` to create procedural bone without the need for VRD files
+- New `$driverbone` and `driverlookat` commands to define procedural bones without VRD files
 - New `$rendermesh` for DMX models containing multiple DMEMesh elements
-- New `$if $elif $else` and `$switch` conditional commands.
-- New `$staticproppose <animation_file> <frame>` to bake a custom pose into the geometry skeleton to a single `static_prop`. Cannot be used together with `$staticprop`. (Doesn't work as expected!) (WORK-IN-PROGRESS)
-- New `$return <optional message>` and `$print <message>`.  `$return` stops the compile with optional message similar to `$qcassert`.
-- New `$deltaproportions` to generate the `a_reference` and `a_proportions`. See `docs/deltaproportions.txt`.
-- New `$include` optional inline parameters:
-  - `iffileexist` checks if file exist, if it doesn't then silently pass and ingore.  Does not stop the compile.
-  - `nofallbackdir` doesn't use `-includedir` fallback
-- `$model` can now be used inside `$bodygroup` blocks, allowing named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.txt`.
-- Recreated some features from StudioMDL++ and NekoMDL:
+- New `$if`, `$elif`, `$else`, and `$switch` conditional commands
+- New `$staticproppose <animation_file> <frame>` to bake a custom pose into a `static_prop`'s geometry skeleton. Cannot be combined with `$staticprop`. **(Work in progress - does not behave as expected)**
+- New `$return <optional message>` to halt compilation with an optional message (similar to `$qcassert`)
+- New `$print <message>` for compile-time output
+- New `$deltaproportions` to generate `a_reference` and `a_proportions`. See `docs/deltaproportions.txt`
+- New `$include` inline options:
+  - `iffileexist` - silently skips the include if the file does not exist
+  - `nofallbackdir` - disables the `-includedir` fallback for this include
+- `$model` can now be used inside `$bodygroup` blocks, enabling named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.txt`
+- Recreated features from StudioMDL++ and NekoMDL:
   - `-cullanims` flag to strip unreferenced `$animation` blocks
   - Bone weight cull threshold reduced from 5% to 0.01%
   - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, and VTA flex deltas
   - `$renamebone` now propagates to the collision model
-  - Fixed crash with blank bodygroup + `$staticprop` (TODO: Test)
+  - Fixed crash with blank bodygroup combined with `$staticprop`
 
 ## Credits
 
-- Valve — Source Engine and SDK
-- [REDxEYE](https://github.com/REDxEYE) — base fork
-- [ficool2](https://github.com/ficool2) — studiomdl++ fixes ideas
-- [Starfelll](https://github.com/Starfelll) — NekoMDL fixes ideas
+- Valve - Source Engine and SDK
+- [REDxEYE](https://github.com/REDxEYE) - base fork
+- [ficool2](https://github.com/ficool2) - StudioMDL++ fixes and ideas
+- [Starfelll](https://github.com/Starfelll) - NekoMDL fixes and ideas
