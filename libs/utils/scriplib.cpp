@@ -171,36 +171,90 @@ void DefineMacro( char *macroname )
 	// roll back script_p to previous valid location
 	script->script_p = cp;
 
-	// find end of macro def
-	while (*cp && *cp != '\n')
+	// check if this line uses \\ continuation (old style) or $endmacro terminator (new style)
+	char *scan = cp;
+	bool has_backslash = false;
+	while (*scan && *scan != '\n')
 	{
-		//Msg("%d ", *cp );
-		if (*cp == '\\' && *(cp+1) == '\\')
+		if (*scan == '\\' && *(scan+1) == '\\')
 		{
-			// skip till end of line
-			while (*cp && *cp != '\n')
-			{
-				*cp = ' '; // replace with spaces
-				cp++;
-			}
-
-			if (*cp)
-			{
-				cp++;
-			}
+			has_backslash = true;
+			break;
 		}
-		else
-		{
-			cp++;
-		}
+		scan++;
 	}
 
-	int size = (cp - script->script_p);
+	if (has_backslash)
+	{
+		// old \\ continuation style: each body line ends with \\, last line does not
+		while (*cp && *cp != '\n')
+		{
+			if (*cp == '\\' && *(cp+1) == '\\')
+			{
+				// blank out \\ and everything after it on this line, then continue to next
+				while (*cp && *cp != '\n')
+				{
+					*cp = ' ';
+					cp++;
+				}
+				if (*cp) cp++;
+			}
+			else
+			{
+				cp++;
+			}
+		}
 
-	pmacro->buffer = (char *)malloc( size + 1);
-	memcpy( pmacro->buffer, script->script_p, size );
-	pmacro->buffer[size] = '\0';
-	pmacro->end_p = &pmacro->buffer[size]; 
+		int size = (int)(cp - script->script_p);
+		pmacro->buffer = (char *)malloc( size + 1 );
+		memcpy( pmacro->buffer, script->script_p, size );
+		pmacro->buffer[size] = '\0';
+		pmacro->end_p = &pmacro->buffer[size];
+	}
+	else
+	{
+		// $endmacro terminator style: body follows on subsequent lines, terminated by $endmacro
+		// skip the rest of the definition line (past the params)
+		while (*cp && *cp != '\n') cp++;
+		if (*cp) cp++;
+
+		char *body_start = cp;
+		char *body_end = cp;
+		char *after_endmacro = cp;
+
+		while (*cp)
+		{
+			// skip leading whitespace to check for $endmacro token
+			char *check = cp;
+			while (*check == ' ' || *check == '\t') check++;
+
+			if (_strnicmp( check, "$endmacro", 9 ) == 0)
+			{
+				char c = *(check + 9);
+				if (c == '\0' || c == '\n' || c == '\r' || c == ' ' || c == '\t')
+				{
+					body_end = cp;
+					while (*check && *check != '\n') check++;
+					if (*check) check++;
+					after_endmacro = check;
+					break;
+				}
+			}
+
+			while (*cp && *cp != '\n') cp++;
+			if (*cp) cp++;
+			body_end = cp;
+			after_endmacro = cp;
+		}
+
+		int size = (int)(body_end - body_start);
+		pmacro->buffer = (char *)malloc( size + 1 );
+		if (size > 0)
+			memcpy( pmacro->buffer, body_start, size );
+		pmacro->buffer[size] = '\0';
+		pmacro->end_p = &pmacro->buffer[size];
+		cp = after_endmacro;
+	}
 
 	macrolist[nummacros++] = pmacro;
 	if ( nummacros == MAX_MACROS )
@@ -1387,6 +1441,14 @@ skipspace:
 					break;
 				if (token_p == &token[MAXTOKEN])
 					Error ("Token too large on line %i\n",scriptline);
+			}
+		}
+		else if ( *script->script_p == '$' )
+		{
+			if ( !ExpandVariableToken( token_p ) )
+			{
+				// bare $ with no matching closing $ - treat as single char
+				*token_p++ = *script->script_p++;
 			}
 		}
 		else

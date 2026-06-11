@@ -1929,6 +1929,7 @@ struct StudioMdlContext {
 
     int maxVertexLimit = MAXSTUDIOVERTS / 3;
     int maxVertexClamp = MAXSTUDIOVERTS / 3;
+    int maxBoneLimit = MAXSTUDIOBONES;
 
     int numverts = 0;
     CUtlVectorAuto<Vector> vertex;

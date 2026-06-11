@@ -4931,6 +4931,16 @@ void Cmd_AppendSource() {
     AddSrcToSrc(pOrigSource, pAppendSource, matTemp);
 }
 
+void Cmd_maxBones() {
+    GetToken(false);
+    int limit = atoi(token);
+    if (limit < 1 || limit > MAXSTUDIOBONES) {
+        MdlError("$maxbones: value %d out of range [1, %d]\n", limit, MAXSTUDIOBONES);
+        return;
+    }
+    g_StudioMdlContext.maxBoneLimit = limit;
+}
+
 void Cmd_maxVerts() {
     // first limit
     GetToken(false);
@@ -8337,6 +8347,7 @@ MDLCommand_t g_Commands[] =
                 {"$subd",                            Cmd_SubdivisionSurface,},
                 {"$boneflexdriver",                  Cmd_BoneFlexDriver,},
                 {"$maxverts",                        Cmd_maxVerts,},
+                {"$maxbones",                        Cmd_maxBones,},
                 {"$preservetriangleorder",           Cmd_PreserveTriangleOrder,},
                 {"$qcassert",                        Cmd_QCAssert,},
                 {"$lcaseallsequences",               Cmd_LCaseAllSequences,},

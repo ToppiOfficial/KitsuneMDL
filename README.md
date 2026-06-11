@@ -16,10 +16,10 @@ A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](
 
 ## Features
 
-- 64 Bit
+- 64-bit with no dependencies
 - Increased some limit
   - Bone limit 256 -> 1024
-  - Texture limit 32 -> 64
+  - Texture limit 32 -> 96
   - Flex vertices limit 10000 -> 32768
   - Mesh vertices limit 21845 -> 174762 (Overall model mesh limit: 65536 -> 524288)
 - Replaced nvstrip with meshoptimizer

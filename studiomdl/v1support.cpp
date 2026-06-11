@@ -1,6 +1,6 @@
-//========= Copyright � 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
 //
-// Purpose: 
+// Purpose:
 //
 // $NoKeywords: $
 //
@@ -19,46 +19,101 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <unordered_map>
 
 #include "common/scriplib.h"
 #include "studiomdl/studiomdl.h"
 
 extern StudioMdlContext g_StudioMdlContext;
 
+// --------------------------------------------------------------------------
+// Vertex deduplication hash map
+//
+// Key covers all fields compared with exact equality: material, position,
+// primary texcoord.  The dot-product normal check and bone-weight checks
+// are handled in the linear walk of the per-bucket chain.
+// Chain linkage reuses v_unify_t::next (already in the struct).
+// --------------------------------------------------------------------------
+struct SmdVertKey {
+    int      mat;
+    uint32_t px, py, pz;
+    uint32_t u, v;
+
+    bool operator==(const SmdVertKey& o) const {
+        return mat == o.mat
+            && px == o.px && py == o.py && pz == o.pz
+            && u  == o.u  && v  == o.v;
+    }
+};
+
+struct SmdVertKeyHash {
+    size_t operator()(const SmdVertKey& k) const noexcept {
+        // FNV-1a 64-bit
+        uint64_t h = 14695981039346656037ULL;
+        auto eat = [&](uint32_t x) { h = (h ^ (uint64_t)x) * 1099511628211ULL; };
+        eat((uint32_t)k.mat);
+        eat(k.px); eat(k.py); eat(k.pz);
+        eat(k.u);  eat(k.v);
+        return (size_t)h;
+    }
+};
+
+static std::unordered_map<SmdVertKey, int, SmdVertKeyHash> s_smdVertMap;
+
+// Build a key from exact-match vertex fields
+static inline SmdVertKey MakeSmdVertKey(int material, const Vector& vertex, const Vector2D& texcoord) {
+    SmdVertKey k;
+    k.mat = material;
+    memcpy(&k.px, &vertex.x, 4);
+    memcpy(&k.py, &vertex.y, 4);
+    memcpy(&k.pz, &vertex.z, 4);
+    memcpy(&k.u,  &texcoord.x, 4);
+    memcpy(&k.v,  &texcoord.y, 4);
+    return k;
+}
+
+// --------------------------------------------------------------------------
+
 int lookup_index(s_source_t *psource, int material, Vector &vertex, Vector &normal, Vector2D texcoord, int iCount,
                  const int *bones, const float *weights, int iExtras, const float *extras) {
-    int i, j, k;
 
-    for (i = 0; i < g_numvlist; i++) {
-        if (v_listdata[i].m == material
-            && DotProduct(g_StudioMdlContext.normal[i], normal) > normal_blend
-            && VectorCompare(g_StudioMdlContext.vertex[i], vertex)
-            && g_StudioMdlContext.texcoord[0][i].x == texcoord[0]
-            && g_StudioMdlContext.texcoord[0][i].y == texcoord[1]) {
-            if (g_StudioMdlContext.bone[i].numbones == iCount) {
-                for (j = 0; j < iCount; j++) {
-                    if (g_StudioMdlContext.bone[i].bone[j] != bones[j] || g_StudioMdlContext.bone[i].weight[j] != weights[j])
-                        break;
-                }
-                if (j == iCount) {
-                    // Assume extra floats are additional texcoords
-                    for (k = 0; k < (iExtras / 2); k++) {
-                        if (v_listdata[i].t[k + 1] == -1) // Texcoord not set
-                            break;
-                        if (g_StudioMdlContext.texcoord[k + 1][i][0] != extras[k * 2])
-                            break;
-                        if (g_StudioMdlContext.texcoord[k + 1][i][1] != extras[k * 2 + 1])
+    SmdVertKey key = MakeSmdVertKey(material, vertex, texcoord);
+
+    auto it = s_smdVertMap.find(key);
+    if (it != s_smdVertMap.end()) {
+        // Walk the per-bucket chain
+        int i = it->second;
+        while (i >= 0) {
+            if (DotProduct(g_StudioMdlContext.normal[i], normal) > normal_blend) {
+                if (g_StudioMdlContext.bone[i].numbones == iCount) {
+                    int j;
+                    for (j = 0; j < iCount; j++) {
+                        if (g_StudioMdlContext.bone[i].bone[j] != bones[j] ||
+                            g_StudioMdlContext.bone[i].weight[j] != weights[j])
                             break;
                     }
-
-                    if (k == (iExtras / 2)) {
-                        v_listdata[i].lastref = g_numvlist;
-                        return i;
+                    if (j == iCount) {
+                        int k;
+                        for (k = 0; k < (iExtras / 2); k++) {
+                            if (v_listdata[i].t[k + 1] == -1) break;
+                            if (g_StudioMdlContext.texcoord[k + 1][i][0] != extras[k * 2]) break;
+                            if (g_StudioMdlContext.texcoord[k + 1][i][1] != extras[k * 2 + 1]) break;
+                        }
+                        if (k == (iExtras / 2)) {
+                            v_listdata[i].lastref = g_numvlist;
+                            return i;
+                        }
                     }
                 }
             }
+            // Advance to next entry in chain
+            i = v_listdata[i].next ? (int)(v_listdata[i].next - v_listdata) : -1;
         }
     }
+
+    // New vertex
+    int i = g_numvlist;
     if (i >= MAXSTUDIOSRCVERTS) {
         MdlError("too many indices in source: \"%s\"\n", psource->filename);
     }
@@ -68,7 +123,7 @@ int lookup_index(s_source_t *psource, int material, Vector &vertex, Vector &norm
     Vector2Copy(texcoord, g_StudioMdlContext.texcoord[0][i]);
 
     g_StudioMdlContext.bone[i].numbones = iCount;
-    for (j = 0; j < iCount; j++) {
+    for (int j = 0; j < iCount; j++) {
         g_StudioMdlContext.bone[i].bone[j] = bones[j];
         g_StudioMdlContext.bone[i].weight[j] = weights[j];
     }
@@ -78,169 +133,149 @@ int lookup_index(s_source_t *psource, int material, Vector &vertex, Vector &norm
     v_listdata[i].n = i;
     v_listdata[i].t[0] = i;
 
-
-    // Set default indices for additional texcoords to -1
-    for (j = 1; j < (MAXSTUDIOTEXCOORDS); ++j) {
+    for (int j = 1; j < MAXSTUDIOTEXCOORDS; ++j)
         v_listdata[i].t[j] = -1;
-    }
-    // Populate additional texcoords with any extra floats
-    for (j = 0; j < (iExtras / 2); j++) {
+
+    for (int j = 0; j < (iExtras / 2); j++) {
         g_StudioMdlContext.texcoord[j + 1][i][0] = extras[j * 2];
         g_StudioMdlContext.texcoord[j + 1][i][1] = extras[j * 2 + 1];
         v_listdata[i].t[j + 1] = i;
     }
 
-
     v_listdata[i].lastref = g_numvlist;
+
+    // Prepend to hash bucket chain
+    if (it != s_smdVertMap.end()) {
+        v_listdata[i].next = &v_listdata[it->second];
+        it->second = i;
+    } else {
+        v_listdata[i].next = nullptr;
+        s_smdVertMap.emplace(key, i);
+    }
 
     g_numvlist = i + 1;
     return i;
 }
 
-// GetNextFaceItem
-// Get next item from string of space separated data
-static char *GetNextFaceItem(char *pCurrentItem) {
-    if (!pCurrentItem) {
-        return nullptr;
-    }
+// --------------------------------------------------------------------------
+// Fast single-pass face-line tokenizer
+//
+// Replaces sscanf + repeated GetNextFaceItem (strchr) calls with one linear
+// scan over the line buffer using strtol/strtof.
+// --------------------------------------------------------------------------
+static inline const char *SkipSpaces(const char *p) {
+    while (*p == ' ' || *p == '\t') p++;
+    return p;
+}
 
-    char *pChar = pCurrentItem;
+static inline float ParseFloat(const char *&p) {
+    char *end;
+    float v = strtof(p, &end);
+    p = end;
+    return v;
+}
 
-    //Skip any leading spaces
-    while (*pChar == ' ') {
-        pChar++;
-    }
-
-    pChar = strchr(pChar, ' ');
-
-    if (!pChar) {
-        return nullptr;
-    }
-
-    while (*pChar == ' ') {
-        pChar++;
-    }
-
-    if ((*pChar == 0) || (*pChar == '\n')) {
-        return nullptr;
-    }
-    return pChar;
+static inline int ParseInt(const char *&p) {
+    char *end;
+    int v = (int)strtol(p, &end, 10);
+    p = end;
+    return v;
 }
 
 void ParseFaceData(s_source_t *psource, int material, s_face_t *pFace) {
-    int index[3];
-    int i, j;
-    Vector p;
-    Vector normal;
-    Vector2D t;
-    int iCount, bones[MAXSTUDIOSRCBONES];
+    int   index[3];
+    int   iCount, bones[MAXSTUDIOSRCBONES];
     float weights[MAXSTUDIOSRCBONES];
-    int iExtras;
+    int   iExtras;
     float extras[(MAXSTUDIOTEXCOORDS - 1) * 2];
-    int bone;
 
-    for (j = 0; j < 3; j++) {
+    for (int j = 0; j < 3; j++) {
         memset(g_StudioMdlContext.szLine, 0, sizeof(g_StudioMdlContext.szLine));
 
         if (!GetLineInput()) {
-            MdlError("%s: error on g_StudioMdlContext.szLine %d: %s", g_StudioMdlContext.szFilename, g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+            MdlError("%s: error on line %d: %s",
+                     g_StudioMdlContext.szFilename,
+                     g_StudioMdlContext.iLinecount,
+                     g_StudioMdlContext.szLine);
         }
 
-        iCount = 0;
+        iCount  = 0;
         iExtras = 0;
 
-        i = sscanf(g_StudioMdlContext.szLine, "%d %f %f %f %f %f %f %f %f",
-                   &bone,
-                   &p[0], &p[1], &p[2],
-                   &normal[0], &normal[1], &normal[2],
-                   &t[0], &t[1]);
+        const char *p = SkipSpaces(g_StudioMdlContext.szLine);
 
-        if (i < 9)
-            continue;
+        // bone_index  px py pz  nx ny nz  u v
+        int bone = ParseInt(p);
+        p = SkipSpaces(p);
+
+        Vector pos, nrm;
+        Vector2D t;
+        pos[0] = ParseFloat(p); p = SkipSpaces(p);
+        pos[1] = ParseFloat(p); p = SkipSpaces(p);
+        pos[2] = ParseFloat(p); p = SkipSpaces(p);
+        nrm[0] = ParseFloat(p); p = SkipSpaces(p);
+        nrm[1] = ParseFloat(p); p = SkipSpaces(p);
+        nrm[2] = ParseFloat(p); p = SkipSpaces(p);
+        t[0]   = ParseFloat(p); p = SkipSpaces(p);
+        t[1]   = ParseFloat(p); p = SkipSpaces(p);
 
         if (bone < 0 || bone >= psource->numbones) {
-            MdlError("bogus bone index\n%d %s :\n%s", g_StudioMdlContext.iLinecount, g_StudioMdlContext.szFilename, g_StudioMdlContext.szLine);
+            MdlError("bogus bone index\n%d %s :\n%s",
+                     g_StudioMdlContext.iLinecount,
+                     g_StudioMdlContext.szFilename,
+                     g_StudioMdlContext.szLine);
         }
 
-        //Scale face pos
-        scale_vertex(p);
+        scale_vertex(pos);
 
-        // Parse bones.
-        int k;
-        char *pItem = g_StudioMdlContext.szLine;
-        // Skip first 9 items already parsed via sscanf above
-        for (k = 0; k < 9; k++) {
-            pItem = GetNextFaceItem(pItem);
-        }
-        // Read bone count
-        if (pItem) {
-            iCount = atoi(pItem);
-            if (iCount > 0) {
-                for (k = 0; k < iCount && k < MAXSTUDIOSRCBONES; k++) {
-                    pItem = GetNextFaceItem(pItem);
-                    if (!pItem) {
-                        MdlError("Bone ID %d not found\n%d %s :\n%s", k, g_StudioMdlContext.iLinecount, g_StudioMdlContext.szFilename, g_StudioMdlContext.szLine);
-                    }
-                    bones[k] = atoi(pItem);
+        // Optional bone weight list
+        if (*p && *p != '\n' && *p != '\r') {
+            iCount = ParseInt(p);
+            p = SkipSpaces(p);
+            int actualCount = (iCount < MAXSTUDIOSRCBONES) ? iCount : MAXSTUDIOSRCBONES;
+            for (int k = 0; k < actualCount; k++) {
+                if (!(*p)) {
+                    MdlError("Bone ID %d not found\n%d %s :\n%s",
+                             k, g_StudioMdlContext.iLinecount,
+                             g_StudioMdlContext.szFilename,
+                             g_StudioMdlContext.szLine);
+                }
+                bones[k]   = ParseInt(p);   p = SkipSpaces(p);
+                weights[k] = ParseFloat(p); p = SkipSpaces(p);
+            }
 
-                    pItem = GetNextFaceItem(pItem);
-                    if (!pItem) {
-                        MdlError("Bone weight %d not found\n%d %s :\n%s", k, g_StudioMdlContext.iLinecount, g_StudioMdlContext.szFilename, g_StudioMdlContext.szLine);
+            // SMD v3 extra texcoords
+            if (psource->version >= 3 && *p && *p != '\n' && *p != '\r') {
+                iExtras = ParseInt(p);
+                p = SkipSpaces(p);
+                iExtras = MIN(iExtras, (MAXSTUDIOTEXCOORDS - 1) * 2);
+                for (int e = 0; e < iExtras; e++) {
+                    if (!(*p)) {
+                        MdlError("Extra data item %d not found\n%d %s :\n%s",
+                                 e, g_StudioMdlContext.iLinecount,
+                                 g_StudioMdlContext.szFilename,
+                                 g_StudioMdlContext.szLine);
                     }
-                    weights[k] = atof(pItem);
+                    extras[e] = ParseFloat(p);
+                    p = SkipSpaces(p);
                 }
             }
-            if (psource->version >= 3) {
-                pItem = GetNextFaceItem(pItem);
-                if (pItem) {
-                    iExtras = atoi(pItem);
-                    if (iExtras > 0) {
-                        iExtras = MIN(iExtras, (MAXSTUDIOTEXCOORDS - 1) * 2);
-                        for (int e = 0; e < iExtras; e++) {
-                            pItem = GetNextFaceItem(pItem);
-                            if (!pItem) {
-                                MdlError("Extra data item %d not found\n%d %s :\n%s", e, g_StudioMdlContext.iLinecount, g_StudioMdlContext.szFilename,
-                                         g_StudioMdlContext.szLine);
-                            }
-                            extras[e] = atof(pItem);
-                        }
-                    }
-                }
-            }
-            // printf("%d ", iCount );
-
-            //printf("\n");
-            //exit(1);
         }
 
-        // adjust_vertex( p );
-        // scale_vertex( p );
-
-        // move vertex position to object space.
-        // VectorSubtract( p, psource->bonefixup[bone].worldorg, tmp );
-        // VectorTransform(tmp, psource->bonefixup[bone].im, p );
-
-        // move normal to object space.
-        // VectorCopy( normal, tmp );
-        // VectorTransform(tmp, psource->bonefixup[bone].im, normal );
-        // VectorNormalize( normal );
-
-        // invert v
-        t[1] = 1.0 - t[1];
+        // Invert V
+        t[1] = 1.0f - t[1];
 
         if (iCount == 0) {
-            iCount = 1;
-            bones[0] = bone;
-            weights[0] = 1.0;
+            iCount    = 1;
+            bones[0]  = bone;
+            weights[0] = 1.0f;
         } else {
             iCount = SortAndBalanceBones(iCount, MAXSTUDIOBONEWEIGHTS, bones, weights);
         }
 
-
-        index[j] = lookup_index(psource, material, p, normal, t, iCount, bones, weights, iExtras, extras);
+        index[j] = lookup_index(psource, material, pos, nrm, t, iCount, bones, weights, iExtras, extras);
     }
 
-    // pFace->material = material; // BUG
     pFace->a = index[0];
     pFace->b = index[2];
     pFace->c = index[1];
@@ -257,6 +292,10 @@ void Grab_Triangles(s_source_t *psource) {
 
     g_StudioMdlContext.numfaces = 0;
     g_numvlist = 0;
+
+    // Reset vertex dedup map for this mesh
+    s_smdVertMap.clear();
+    s_smdVertMap.reserve(65536);
 
     //
     // load the base triangles
@@ -324,7 +363,6 @@ void Grab_Triangles(s_source_t *psource) {
 
         // remove degenerate triangles
         if (f.a == f.b || f.b == f.c || f.a == f.c) {
-            // printf("Degenerate triangle %d %d %d\n", f.a, f.b, f.c );
             continue;
         }
 
@@ -338,6 +376,10 @@ void Grab_Triangles(s_source_t *psource) {
             g_StudioMdlContext.numtexcoords[i] = g_numvlist;
         }
     }
+
+    // Release map memory after we're done building this mesh
+    s_smdVertMap.clear();
+    s_smdVertMap.rehash(0);
 
     BuildIndividualMeshes(psource);
 }
@@ -390,24 +432,3 @@ int Load_SMD(s_source_t *psource) {
 
     return 1;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

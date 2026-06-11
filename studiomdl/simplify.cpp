@@ -5465,13 +5465,13 @@ void RemapBones() {
         MdlWarning("Model uses %d bones; vanilla Source engine supports a maximum of 256\n", g_StudioMdlContext.numbones);
     }
 
-    if (g_StudioMdlContext.numbones >= MAXSTUDIOBONES) {
+    if (g_StudioMdlContext.numbones > g_StudioMdlContext.maxBoneLimit) {
         // export bones
         if (g_definebones) {
             DumpDefineBones();
         }
 
-        MdlError("Too many bones used in model, used %d, max %d\n", g_StudioMdlContext.numbones, MAXSTUDIOBONES);
+        MdlError("Too many bones used in model, used %d, max %d\n", g_StudioMdlContext.numbones, g_StudioMdlContext.maxBoneLimit);
     }
 
     /*
