@@ -256,7 +256,8 @@ namespace OptimizedModel {
         bool OptimizeFromStudioHdr(studiohdr_t *phdr, s_bodypart_t *pSrcBodyParts, int vertCacheSize,
                                    bool usesFixedFunction, bool bForceSoftwareSkin, bool bHWFlex, int maxBonesPerVert,
                                    int maxBonesPerFace,
-                                   int maxBonesPerStrip, const char *fileName, const char *glViewFileName);
+                                   int maxBonesPerStrip, const char *fileName, const char *glViewFileName,
+                                   void **ppBufOut = nullptr, int *pLenOut = nullptr);
 
     private:
         void CleanupEverything();
@@ -1179,7 +1180,7 @@ namespace OptimizedModel {
 #define MIN_BONE_INFLUENCE 0.0001f
 
     static void TryToReduceBoneInfluence(Vertex_t &stripGroupVert,
-                                         mstudioboneweight_t const &boneWeights, int maxBones) {
+                                         mstudioboneweight_t &boneWeights, int maxBones) {
         int i;
         while (stripGroupVert.numBones > maxBones) {
             // Find the minimum bone weight...
@@ -1198,7 +1199,7 @@ namespace OptimizedModel {
 
             // Now that we got it, remove that bone influence if it's small enough
             if (minWeight >= MIN_BONE_INFLUENCE)
-                return;
+                break;
 
             // Blat out that bone!
             for (i = minIndex; i < MAX_NUM_BONES_PER_VERT - 1; ++i) {
@@ -1209,6 +1210,20 @@ namespace OptimizedModel {
             stripGroupVert.boneWeightIndex[MAX_NUM_BONES_PER_VERT - 1] = 0;
 
             --stripGroupVert.numBones;
+        }
+
+        // Renormalize remaining weights to sum to 1.0 after any removals.
+        float t = 0.0f;
+        for (i = 0; i < MAX_NUM_BONES_PER_VERT; ++i) {
+            if (stripGroupVert.boneID[i] != 255)
+                t += boneWeights.weight[stripGroupVert.boneWeightIndex[i]];
+        }
+        if (t > 0.0f && fabsf(t - 1.0f) > 0.001f) {
+            t = 1.0f / t;
+            for (i = 0; i < MAX_NUM_BONES_PER_VERT; ++i) {
+                if (stripGroupVert.boneID[i] != 255)
+                    boneWeights.weight[stripGroupVert.boneWeightIndex[i]] *= t;
+            }
         }
     }
 
@@ -1243,7 +1258,18 @@ namespace OptimizedModel {
             if (!g_staticprop && bonesAffectingVertex <= 0) {
                 MdlWarning("too few bones/vert (%d) : it has no bones!\n", bonesAffectingVertex);
             } else if (bonesAffectingVertex > MAX_NUM_BONES_PER_VERT) {
-                MdlError("too many bones/vert (%d) : MAX_NUM_BONES_PER_VERT needs to be upped\n", bonesAffectingVertex);
+                MdlWarning("Mesh \"%s\" has %d bone influences on vertex %d (max %d) - reducing to top %d by weight\n",
+                           pStudioMesh->pModel()->pszName(), bonesAffectingVertex, vertex, MAX_NUM_BONES_PER_VERT, MAX_NUM_BONES_PER_VERT);
+                float t = 0.0f;
+                for (int k = 0; k < MAX_NUM_BONES_PER_VERT; k++)
+                    t += pBoneWeight->weight[k];
+                if (t > 0.0f) {
+                    t = 1.0f / t;
+                    for (int k = 0; k < MAX_NUM_BONES_PER_VERT; k++)
+                        pBoneWeight->weight[k] *= t;
+                }
+                pBoneWeight->numbones = MAX_NUM_BONES_PER_VERT;
+                bonesAffectingVertex = MAX_NUM_BONES_PER_VERT;
             }
 
             // Set the fields of the strip group's vert
@@ -3210,7 +3236,8 @@ namespace OptimizedModel {
                                                 bool usesFixedFunction, bool bForceSoftwareSkin, bool bHWFlex,
                                                 int maxBonesPerVert, int maxBonesPerFace,
                                                 int maxBonesPerStrip, const char *pFileName,
-                                                const char *glViewFileName) {
+                                                const char *glViewFileName,
+                                                void **ppBufOut, int *pLenOut) {
         Assert(maxBonesPerVert <= MAX_NUM_BONES_PER_VERT);
         Assert(maxBonesPerStrip <= MAX_NUM_BONES_PER_STRIP);
 
@@ -3235,6 +3262,13 @@ namespace OptimizedModel {
 
         //	PrintBoneStateChanges( pHdr, 1 );
         //	PrintVerts( pHdr, 1 );
+
+        if (ppBufOut && pLenOut) {
+            *pLenOut = m_EndOfFileOffset;
+            *ppBufOut = malloc(m_EndOfFileOffset);
+            if (*ppBufOut)
+                memcpy(*ppBufOut, m_FileBuffer->GetPointer(0), m_EndOfFileOffset);
+        }
 
         delete m_FileBuffer;
         m_FileBuffer = nullptr;
@@ -4180,7 +4214,10 @@ namespace OptimizedModel {
 //        }
     }
 
-    void WriteOptimizedFiles(studiohdr_t *phdr, s_bodypart_t *pSrcBodyParts) {
+    void WriteOptimizedFiles(studiohdr_t *phdr, s_bodypart_t *pSrcBodyParts,
+                             void **ppDx90Buf, int *pDx90Len,
+                             void **ppDx80Buf, int *pDx80Len,
+                             void **ppSwBuf,  int *pSwLen) {
         char filename[MAX_PATH];
         char tmpFileName[MAX_PATH];
         char glViewFilename[MAX_PATH];
@@ -4217,7 +4254,8 @@ namespace OptimizedModel {
                                                    3,        // bones/vert
                                                    3 * 3,        // bones/tri
                                                    512,    // bones/strip
-                                                   tmpFileName, glViewFilename);
+                                                   tmpFileName, glViewFilename,
+                                                   ppSwBuf, pSwLen);
         }
 
         if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80) {
@@ -4233,7 +4271,8 @@ namespace OptimizedModel {
                                                    3  /* bones/vert */,
                                                    9  /* bones/tri */,
                                                    16  /* bones/strip */,
-                                                   tmpFileName, glViewFilename);
+                                                   tmpFileName, glViewFilename,
+                                                   ppDx80Buf, pDx80Len);
         }
 
         if (true)    // Always process dx90
@@ -4250,7 +4289,8 @@ namespace OptimizedModel {
                                                    3  /* bones/vert */,
                                                    9  /* bones/tri */,
                                                    53  /* bones/strip */,
-                                                   tmpFileName, glViewFilename);
+                                                   tmpFileName, glViewFilename,
+                                                   ppDx90Buf, pDx90Len);
         }
 
         s_StringTable.Purge();

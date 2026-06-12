@@ -43,7 +43,10 @@ extern StudioMdlContext g_StudioMdlContext;
 // pData points to the current location in an output buffer and pStart is
 // the beginning of the buffer.
 
-bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr);
+bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr,
+                               void *pDx90Buf, int dx90Len,
+                               void *pDx80Buf, int dx80Len,
+                               void *pSwBuf,   int swLen);
 
 bool Clamp_RootLOD(studiohdr_t *phdr);
 
@@ -3303,15 +3306,23 @@ void WriteModelFiles() {
         for (int i = 0; i < phdr->numbodyparts; i++) {
             pBodyParts[i] = g_bodypart[i];
         }
-        OptimizedModel::WriteOptimizedFiles(phdr, pBodyParts);
+        void *pDx90Buf = nullptr, *pDx80Buf = nullptr, *pSwBuf = nullptr;
+        int   dx90Len  = 0,        dx80Len  = 0,        swLen  = 0;
+        OptimizedModel::WriteOptimizedFiles(phdr, pBodyParts,
+                                            &pDx90Buf, &dx90Len,
+                                            &pDx80Buf, &dx80Len,
+                                            &pSwBuf,   &swLen);
         free(pBodyParts);
 
         // now have external finalized vtx (windings) and vvd (vertexes)
         // re-open files, sort vertexes, perform fixups, and rewrite
         // purposely isolated as a post process for stability
-        if (!FixupToSortedLODVertexes(phdr)) {
+        if (!FixupToSortedLODVertexes(phdr, pDx90Buf, dx90Len, pDx80Buf, dx80Len, pSwBuf, swLen)) {
             MdlError("Aborted vertex sort fixup on '%s':\n", filename);
         }
+        free(pDx90Buf);
+        free(pDx80Buf);
+        free(pSwBuf);
 
         if (!Clamp_RootLOD(phdr)) {
             MdlError("Aborted root lod shift '%s':\n", filename);
@@ -3568,11 +3579,12 @@ bool BuildSortedVertexList(const studiohdr_t *pStudioHdr, const void *pVtxBuff, 
 
             // allocate each mesh's vertex list
             poolStart = numVertexPools;
+            // pre-compute offset for the first mesh of this model to avoid O(M^2) re-sum
+            vertexOffset = 0;
+            for (m = 0; m < poolStart; m++)
+                vertexOffset += pVertexPools[m].numVertexes;
             for (k = 0; k < pStudioModel->nummeshes; k++) {
-                // track the expected relative offset into a flattened vertex list
-                vertexOffset = 0;
-                for (m = 0; m < poolStart + k; m++)
-                    vertexOffset += pVertexPools[m].numVertexes;
+                // vertexOffset is maintained incrementally across the k-loop
 
                 pStudioMesh = pStudioModel->pMesh(k);
                 numMeshVertexes = pStudioMesh->numvertices;
@@ -3597,6 +3609,7 @@ bool BuildSortedVertexList(const studiohdr_t *pStudioHdr, const void *pVtxBuff, 
                 }
                 pVertexPools[numVertexPools].numVertexes = numMeshVertexes;
                 numVertexPools++;
+                vertexOffset += numMeshVertexes;
             }
 
             // iterate all lods
@@ -3705,11 +3718,12 @@ bool BuildSortedVertexList(const studiohdr_t *pStudioHdr, const void *pVtxBuff, 
         pStudioBodyPart = pStudioHdr->pBodypart(i);
         for (j = 0; j < pStudioBodyPart->nummodels; j++) {
             pStudioModel = pStudioBodyPart->pModel(j);
+            // pre-compute offset for first mesh of this model to avoid O(M^2) re-sum
+            vertexOffset = 0;
+            for (n = 0; n < poolStart; n++)
+                vertexOffset += pVertexPools[n].numVertexes;
             for (m = 0; m < pStudioModel->nummeshes; m++) {
-                // track the expected offset into linear vertexes
-                vertexOffset = 0;
-                for (n = 0; n < poolStart + m; n++)
-                    vertexOffset += pVertexPools[n].numVertexes;
+                // vertexOffset is maintained incrementally across the m-loop
 
                 // skip counting if there's no vertices in this mesh
                 if (pStudioModel->pMesh(m)->numvertices == 0) {
@@ -3742,6 +3756,7 @@ bool BuildSortedVertexList(const studiohdr_t *pStudioHdr, const void *pVtxBuff, 
                         finalMeshVertID++;
                     }
                 }
+                vertexOffset += pVertexPools[poolStart + m].numVertexes;
             }
             poolStart += pStudioModel->nummeshes;
         }
@@ -4039,9 +4054,11 @@ bool FixupVVDFile(const char *fileName, const studiohdr_t *pStudioHdr, const voi
 //
 // VTX files get their windings remapped.
 //-----------------------------------------------------------------------------
+// pPreloadedBuf: if non-null, use this buffer instead of loading from disk (caller owns it, not freed here).
 bool
 FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPool_t *pVertexPools, int numVertexPools,
-             const usedVertex_t *pVertexList, int numVertexes) {
+             const usedVertex_t *pVertexList, int numVertexes,
+             void *pPreloadedBuf, int preloadedLen) {
     OptimizedModel::FileHeader_t *pVtxHdr;
     OptimizedModel::BodyPartHeader_t *pBodyPartHdr;
     OptimizedModel::ModelHeader_t *pModelHdr;
@@ -4050,7 +4067,6 @@ FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPo
     OptimizedModel::StripGroupHeader_t *pStripGroupHdr;
     OptimizedModel::Vertex_t *pStripVertex;
     int currLod;
-    int vertexOffset;
     mstudiobodyparts_t *pStudioBodyPart;
     mstudiomodel_t *pStudioModel;
     int i, j, k, m, n;
@@ -4058,8 +4074,16 @@ FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPo
     int VtxLen;
     int newMeshVertID;
     void *pVtxBuff;
+    bool bOwnBuf;
 
-    VtxLen = LoadFile((char *) fileName, &pVtxBuff);
+    if (pPreloadedBuf) {
+        pVtxBuff = pPreloadedBuf;
+        VtxLen = preloadedLen;
+        bOwnBuf = false;
+    } else {
+        VtxLen = LoadFile((char *) fileName, &pVtxBuff);
+        bOwnBuf = true;
+    }
     pVtxHdr = (OptimizedModel::FileHeader_t *) pVtxBuff;
 
     // iterate all lod's windings
@@ -4072,6 +4096,11 @@ FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPo
             pModelHdr = pBodyPartHdr->pModel(j);
             pStudioModel = pStudioBodyPart->pModel(j);
 
+            // pre-compute pool offset for this model's first mesh to avoid O(M^2) re-sum per mesh
+            int basePoolOffset = 0;
+            for (m = 0; m < poolStart; m++)
+                basePoolOffset += pVertexPools[m].numVertexes;
+
             // iterate all lods
             for (currLod = 0; currLod < pVtxHdr->numLODs; currLod++) {
                 pModelLODHdr = pModelHdr->pLOD(currLod);
@@ -4079,12 +4108,8 @@ FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPo
                 if (pModelLODHdr->numMeshes != pStudioModel->nummeshes)
                     return false;
 
+                int meshPoolOffset = basePoolOffset;
                 for (k = 0; k < pModelLODHdr->numMeshes; k++) {
-                    // track the expected relative offset into the flat vertexes
-                    vertexOffset = 0;
-                    for (m = 0; m < poolStart + k; m++)
-                        vertexOffset += pVertexPools[m].numVertexes;
-
                     pMeshHdr = pModelLODHdr->pMesh(k);
                     for (m = 0; m < pMeshHdr->numStripGroups; m++) {
                         pStripGroupHdr = OptimizedModel::GetStripGroup(pMeshHdr, m);
@@ -4103,19 +4128,17 @@ FixupVTXFile(const char *fileName, const studiohdr_t *pStudioHdr, const vertexPo
                             pStripVertex->origMeshVertID = newMeshVertID;
                         }
                     }
+                    meshPoolOffset += pVertexPools[poolStart + k].numVertexes;
                 }
             }
             poolStart += pStudioModel->nummeshes;
         }
     }
 
-    // pVtxHdr->length = VtxLen;
-    {
-//		CP4AutoEditAddFile autop4( fileName );
-        SaveFile((char *) fileName, pVtxBuff, VtxLen);
-    }
+    SaveFile((char *) fileName, pVtxBuff, VtxLen);
 
-    free(pVtxBuff);
+    if (bOwnBuf)
+        free(pVtxBuff);
 
     return true;
 }
@@ -4241,7 +4264,10 @@ bool FixupMDLFile(const char *fileName, studiohdr_t *pStudioHdr, const void *pVt
 // VVD files get vertexes fixed to a flat sorted order, ascending in lower detail lod usage
 // VTX files get their windings remapped to the sort.
 //-----------------------------------------------------------------------------
-bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr) {
+bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr,
+                               void *pDx90Buf, int dx90Len,
+                               void *pDx80Buf, int dx80Len,
+                               void *pSwBuf,   int swLen) {
     char filename[260];
     char tmpFileName[260];
     void *pVtxBuff;
@@ -4249,13 +4275,17 @@ bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr) {
     vertexPool_t *pVertexPools;
     int numVertexes;
     int numVertexPools;
-    int VtxLen;
     int i;
+    bool bLoadedLodBuf;
 
     const char *vtxPrefixes[] = {".dx90.vtx", ".dx80.vtx", ".sw.vtx"};
     const bool bWriteDX8 = g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80;
     const int numPrefixes = bWriteDX8 ? ARRAYSIZE(vtxPrefixes) : 1;
     const int idxPrefixLodUsage = bWriteDX8 ? 1 : 0;
+
+    // in-memory preloaded buffers indexed to match vtxPrefixes[]
+    void *preloadedBufs[3]  = { pDx90Buf, pDx80Buf, pSwBuf };
+    int   preloadedLens[3]  = { dx90Len,  dx80Len,  swLen  };
 
     strcpy(filename, gamedir);
 //	if( *g_pPlatformName )
@@ -4270,10 +4300,16 @@ bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr) {
 
     // determine lod usage per vertex
     // all vtx files enumerate model's lod verts, but differ in their mesh makeup
-    // use xxx.dx90.vtx to establish which vertexes are used by each lod
-    strcpy(tmpFileName, filename);
-    strcat(tmpFileName, vtxPrefixes[idxPrefixLodUsage]);
-    VtxLen = LoadFile(tmpFileName, &pVtxBuff);
+    // use the preloaded buffer when available, otherwise load from disk
+    if (preloadedBufs[idxPrefixLodUsage]) {
+        pVtxBuff = preloadedBufs[idxPrefixLodUsage];
+        bLoadedLodBuf = false;
+    } else {
+        strcpy(tmpFileName, filename);
+        strcat(tmpFileName, vtxPrefixes[idxPrefixLodUsage]);
+        LoadFile(tmpFileName, &pVtxBuff);
+        bLoadedLodBuf = true;
+    }
 
     // build the sorted vertex tables
     if (!BuildSortedVertexList(pStudioHdr, pVtxBuff, &pVertexPools, &numVertexPools, &pVertexList, &numVertexes)) {
@@ -4290,10 +4326,11 @@ bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr) {
     }
 
     for (i = 0; i < numPrefixes; i++) {
-        // fixup ???.vtx
+        // fixup ???.vtx, passing preloaded buffer to skip the LoadFile inside FixupVTXFile
         strcpy(tmpFileName, filename);
         strcat(tmpFileName, vtxPrefixes[i]);
-        if (!FixupVTXFile(tmpFileName, pStudioHdr, pVertexPools, numVertexPools, pVertexList, numVertexes)) {
+        if (!FixupVTXFile(tmpFileName, pStudioHdr, pVertexPools, numVertexPools, pVertexList, numVertexes,
+                          preloadedBufs[i], preloadedLens[i])) {
             // data error
             return false;
         }
@@ -4316,7 +4353,9 @@ bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr) {
     }
     if (numVertexPools)
         free(pVertexPools);
-    free(pVtxBuff);
+    if (bLoadedLodBuf)
+        free(pVtxBuff);
+    // preloaded buffers (pDx90Buf etc.) are owned by the caller - not freed here
 
     // success
     return true;

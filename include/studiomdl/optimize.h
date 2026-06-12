@@ -290,7 +290,10 @@ inline StripHeader_t *GetStrip(StripGroupHeader_t *pStripGroup, int i) {
     return pStripGroup->pStrip(i);
 }
 
-void WriteOptimizedFiles( studiohdr_t *phdr, s_bodypart_t *pSrcBodyParts );
+void WriteOptimizedFiles( studiohdr_t *phdr, s_bodypart_t *pSrcBodyParts,
+                          void **ppDx90Buf, int *pDx90Len,
+                          void **ppDx80Buf, int *pDx80Len,
+                          void **ppSwBuf,  int *pSwLen );
 
 }; // namespace OptimizedModel
 

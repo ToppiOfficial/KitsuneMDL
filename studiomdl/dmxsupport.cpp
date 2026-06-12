@@ -358,8 +358,8 @@ LoadVertices(CDmeDag *pDmeDag, CDmeVertexData *pBindState, const matrix3x4_t &ma
 
     int nJointCount = pBindState->HasSkinningData() ? pBindState->JointCount() : 0;
     if (nJointCount > MAXSTUDIOBONEWEIGHTS) {
-        MdlError("Too many bone influences per vertex!\n");
-        return false;
+        MdlWarning("Mesh \"%s\" has %d bone influences per vertex (max %d) - reducing to top %d by weight\n",
+                   pDmeDag ? pDmeDag->GetName() : "<unknown>", nJointCount, MAXSTUDIOBONEWEIGHTS, MAXSTUDIOBONEWEIGHTS);
     }
 
     if (nJointCount <= 0 && nBoneAssign == s_nDefaultRootNode && pDmeDag) {
