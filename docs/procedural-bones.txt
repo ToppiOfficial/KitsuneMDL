@@ -14,6 +14,7 @@ Syntax:
         ...
 
         [unlockbones]
+        [noculltriggers]
         [autotrigger <tolerance_deg> [<min_frame> <max_frame>]]
 
         <helper_bone>
@@ -52,6 +53,14 @@ Parameters:
         Both position AND rotation are remapped this way.
         Use this when sharing one triggerpose file across multiple rigs that
         have different bone lengths, proportions, or bind orientations.
+
+    noculltriggers  (optional flag)
+        By default the compiler checks all triggers for near-duplicates: if
+        two trigger quaternions (the driver bone's rotation at each frame) are
+        within 1 degree of each other, the later one is removed and a message
+        is printed. This prevents over-saturation of the QUATINTERP table,
+        which is common when using autotrigger on a dense animation.
+        noculltriggers disables this cleanup and keeps every trigger as-is.
 
     autotrigger <tolerance_deg> [<min_frame> <max_frame>]  (optional)
         Auto-generates one trigger entry for every frame in the range

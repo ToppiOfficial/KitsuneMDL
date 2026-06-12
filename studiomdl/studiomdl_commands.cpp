@@ -7031,6 +7031,35 @@ bool Grab_AimAtBones() {
     return false;
 }
 
+// Quote-aware token scanner for .vrd lines. Reads up to 5 whitespace-delimited
+// tokens; each token may be wrapped in double-quotes to allow spaces in bone names.
+static int ScanVrdLine(const char *line,
+    char *t0, int s0, char *t1, int s1, char *t2, int s2,
+    char *t3, int s3, char *t4, int s4)
+{
+    char *outs[5] = { t0, t1, t2, t3, t4 };
+    int   szs[5]  = { s0, s1, s2, s3, s4 };
+    const char *p = line;
+    int count = 0;
+    for (int tok = 0; tok < 5; tok++) {
+        while (*p && V_isspace((unsigned char)*p)) p++;
+        if (!*p) break;
+        char *out = outs[tok];
+        int   sz  = szs[tok];
+        int   n   = 0;
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"' && n < sz - 1) out[n++] = *p++;
+            if (*p == '"') p++;
+        } else {
+            while (*p && !V_isspace((unsigned char)*p) && n < sz - 1) out[n++] = *p++;
+        }
+        out[n] = '\0';
+        count++;
+    }
+    return count;
+}
+
 void Grab_QuatInterpBones() {
     char cmd[1024];
     Vector basepos;
@@ -7045,8 +7074,12 @@ void Grab_QuatInterpBones() {
             return;
         }
 
-        int i = sscanf(g_StudioMdlContext.szLine, "%s %s %s %s %s", cmd, pBone->bonename, pBone->parentname, pBone->controlparentname,
-                       pBone->controlname);
+        int i = ScanVrdLine(g_StudioMdlContext.szLine,
+                            cmd, (int)sizeof(cmd),
+                            pBone->bonename, MAXSTUDIONAME,
+                            pBone->parentname, MAXSTUDIONAME,
+                            pBone->controlparentname, MAXSTUDIONAME,
+                            pBone->controlname, MAXSTUDIONAME);
 
         while (i == 4 && stricmp(cmd, "<aimconstraint>") == 0) {
             // If Grab_AimAtBones() returns false, there file is at EOF
@@ -7529,6 +7562,7 @@ void ReportUnusedRenderMeshDefs() {
 //   $driverbone <driver_bone> {
 //       triggerpose <file>
 //       [unlockbones]
+//       [noculltriggers]
 //       [autotrigger <angle_deg> [<min_frame> <max_frame>]]
 //       trigger <tolerance_deg> <frame>   // as many as needed (max 32 total)
 //       ...
@@ -7542,6 +7576,8 @@ void ReportUnusedRenderMeshDefs() {
 // so rotation-only driving works across skeletons with different proportions.
 // 'autotrigger' auto-generates one trigger per frame in [min,max]; any explicit
 // 'trigger' entry for the same frame takes priority.
+// By default, near-duplicate triggers (driver rotation within 1 deg of an earlier
+// trigger) are culled and reported. 'noculltriggers' disables this cleanup.
 //-----------------------------------------------------------------------------
 
 void Cmd_DriverBone() {
@@ -7552,6 +7588,7 @@ void Cmd_DriverBone() {
 
     char triggerPoseFile[MAX_PATH] = {};
     bool unlockBones      = false;
+    bool noCullTriggers   = false;
     bool hasAutoTrigger   = false;
     float autoTriggerAngle = 5.0f;
     int   autoTriggerMin  = -1;
@@ -7578,6 +7615,8 @@ void Cmd_DriverBone() {
             Q_strncpy(triggerPoseFile, token, sizeof(triggerPoseFile));
         } else if (!stricmp(token, "unlockbones")) {
             unlockBones = true;
+        } else if (!stricmp(token, "noculltriggers")) {
+            noCullTriggers = true;
         } else if (!stricmp(token, "trigger")) {
             TriggerEntry e;
             GetToken(false); e.toleranceDeg = (float)atof(token);
@@ -7661,6 +7700,55 @@ void Cmd_DriverBone() {
         MdlWarning("$driverbone '%s': no triggers defined\n", driverBoneName);
         return;
     }
+
+    if (!noCullTriggers && allTriggers.Count() > 1) {
+        // Pre-compute driver bone quaternions so we can compare trigger poses.
+        CUtlVector<Quaternion> triggerQuats;
+        triggerQuats.SetCount(allTriggers.Count());
+        for (int i = 0; i < allTriggers.Count(); i++) {
+            int f = max(0, min(allTriggers[i].frame, pAnim->numframes - 1));
+            s_bone_t *pFrameBones = (f < pAnim->rawanim.Count()) ? pAnim->rawanim[f] : nullptr;
+            if (pFrameBones)
+                AngleQuaternion(pFrameBones[driverLocalIdx].rot, triggerQuats[i]);
+            else
+                triggerQuats[i].Init(0.0f, 0.0f, 0.0f, 1.0f);
+        }
+
+        // Mark entries whose driver rotation falls within 1 deg of an earlier kept entry.
+        CUtlVector<bool> keep;
+        keep.SetCount(allTriggers.Count());
+        for (int i = 0; i < allTriggers.Count(); i++) keep[i] = true;
+
+        int numCulled = 0;
+        for (int i = 0; i < allTriggers.Count(); i++) {
+            if (!keep[i]) continue;
+            for (int j = i + 1; j < allTriggers.Count(); j++) {
+                if (!keep[j]) continue;
+                float angleDiff = RAD2DEG(QuaternionAngleDiff(triggerQuats[i], triggerQuats[j]));
+                if (angleDiff < 1.0f) {
+                    keep[j] = false;
+                    numCulled++;
+                    if (!g_StudioMdlContext.quiet)
+                        Msg("$driverbone '%s': culling near-duplicate trigger frame %d"
+                            " (%.2f deg from frame %d)\n",
+                            driverBoneName, allTriggers[j].frame, angleDiff, allTriggers[i].frame);
+                }
+            }
+        }
+
+        if (numCulled > 0) {
+            CUtlVector<TriggerEntry> filtered;
+            for (int i = 0; i < allTriggers.Count(); i++) {
+                if (keep[i]) filtered.AddToTail(allTriggers[i]);
+            }
+            allTriggers.RemoveAll();
+            for (int i = 0; i < filtered.Count(); i++)
+                allTriggers.AddToTail(filtered[i]);
+            Msg("$driverbone '%s': culled %d near-duplicate trigger(s), %d remaining\n",
+                driverBoneName, numCulled, allTriggers.Count());
+        }
+    }
+
     if (allTriggers.Count() > 32) {
         MdlWarning("$driverbone '%s': %d triggers exceed limit of 32; truncating\n",
                    driverBoneName, allTriggers.Count());
