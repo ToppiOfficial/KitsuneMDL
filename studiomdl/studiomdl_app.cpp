@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.1.0";
+static const char *KITSUNE_MDL_VERSION = "0.1.1";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -871,6 +871,9 @@ int CStudioMDLApp::Main() {
     } else {
         ParseScript(pExt);
     }
+
+    extern void ReportUnusedRenderMeshDefs();
+    ReportUnusedRenderMeshDefs();
 
     if (!g_StudioMdlContext.createMakefile) {
         // Rebuild isActiveModel from actual model->source references so that $rendermesh

@@ -1737,6 +1737,28 @@ LoadModelAndSkeleton(s_source_t *pSource, BoneTransformMap_t &boneMap, CDmeDag *
     if (pCombinationOperator) {
         AddFlexKeys(pModel, pModel, pCombinationOperator, pSource);
         AddCombination(pSource, pCombinationOperator);
+
+        // Warn if any stereo control exists but no real balance data was encoded.
+        // Without balance data all vertices default to side=1.0 so left/right splitting never happens.
+        bool bHasStereoControl = false;
+        for (int i = 0; i < pSource->m_FlexControllerRemaps.Count(); ++i) {
+            if (pSource->m_FlexControllerRemaps[i].m_bIsStereo) {
+                bHasStereoControl = true;
+                break;
+            }
+        }
+        if (bHasStereoControl) {
+            bool bHasRealBalance = false;
+            for (int i = 0; i < s_Balance.Count(); ++i) {
+                if (s_Balance[i] != 1.0f) {
+                    bHasRealBalance = true;
+                    break;
+                }
+            }
+            if (!bHasRealBalance) {
+                MdlWarning("Flex combination controller: one or more controls are marked stereo but no balance data is encoded in the DMX - left/right flex splitting will not occur\n");
+            }
+        }
     }
 
     LoadAttachments(pSkeleton, pSkeleton, pSource, bStaticProp);

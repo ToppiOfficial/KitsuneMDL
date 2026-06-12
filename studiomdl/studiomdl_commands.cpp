@@ -40,12 +40,13 @@ struct s_rendermesh_def_t {
     bool defaultState;
     s_rendermesh_override_t overrides[MAX_RENDERMESH_OVERRIDES];
     int numOverrides;
+    bool used;
 };
 
 static s_rendermesh_def_t g_rendermeshDefs[MAX_RENDERMESH_DEFS];
 static int g_numRendermeshDefs = 0;
 
-static const s_rendermesh_def_t *FindRenderMeshDef(const char *name) {
+static s_rendermesh_def_t *FindRenderMeshDef(const char *name) {
     for (int i = 0; i < g_numRendermeshDefs; i++)
         if (!Q_strcmp(g_rendermeshDefs[i].name, name))
             return &g_rendermeshDefs[i];
@@ -54,7 +55,7 @@ static const s_rendermesh_def_t *FindRenderMeshDef(const char *name) {
 
 static s_source_t *CloneSourceGeometry(s_source_t *pOrig);
 static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate);
-static void ApplyRenderMeshFilter(s_source_t *pSource, const s_rendermesh_def_t *pDef);
+static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 
 //-----------------------------------------------------------------------------
 // Parse contents flags
@@ -154,7 +155,7 @@ bool ParseOptionStudio(CDmeSourceSkin *pSkin) {
 //-----------------------------------------------------------------------------
 void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale, bool bFlipTriangles, bool bQuadSubd) {
     // If the name matches a $rendermesh definition, resolve it to the underlying DMX file.
-    const s_rendermesh_def_t *pRenderMeshDef = FindRenderMeshDef(pFullPath);
+    s_rendermesh_def_t *pRenderMeshDef = FindRenderMeshDef(pFullPath);
     Q_strncpy(pmodel->filename, pRenderMeshDef ? pRenderMeshDef->filename : pFullPath, sizeof(pmodel->filename));
     if (pRenderMeshDef) {
         Q_strncpy(pmodel->rendermesh_name, pFullPath, sizeof(pmodel->rendermesh_name));
@@ -3263,7 +3264,7 @@ static void Cmd_ReplaceModel(LodScriptData_t &lodData) {
 
     // If the token is a $rendermesh alias, resolve it to the underlying DMX filename for the
     // cache lookup, but keep the alias as the src name so GetLODSources can match it.
-    const s_rendermesh_def_t *pRmDef = FindRenderMeshDef(token);
+    s_rendermesh_def_t *pRmDef = FindRenderMeshDef(token);
     if (pRmDef) {
         char szResolved[MAX_PATH];
         Q_strncpy(szResolved, pRmDef->filename, sizeof(szResolved));
@@ -3320,7 +3321,7 @@ static void Cmd_ReplaceModel(LodScriptData_t &lodData) {
 
     // Load the source right here baby! That way its bones will get converted
     if (!lodData.IsStrippedFromModel()) {
-        const s_rendermesh_def_t *pDstRmDef = FindRenderMeshDef(newReplacement.GetDstName());
+        s_rendermesh_def_t *pDstRmDef = FindRenderMeshDef(newReplacement.GetDstName());
         if (pDstRmDef) {
             s_source_t *pSrc = Load_Source(pDstRmDef->filename, "", reverse, false);
             if (pSrc) {
@@ -7351,7 +7352,11 @@ static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString>
 }
 
 
-static void ApplyRenderMeshFilter(s_source_t *pSource, const s_rendermesh_def_t *pDef) {
+static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef) {
+    pDef->used = true;
+    Msg("$rendermesh '%s': applying to '%s' (%d mesh override%s)\n",
+        pDef->name, pSource->filename, pDef->numOverrides, pDef->numOverrides == 1 ? "" : "s");
+
     if (pSource->m_DmeMeshNames.IsEmpty()) {
         MdlWarning("$rendermesh '%s': source '%s' has no DmeMesh tracking data (not a DMX?), skipping filter\n",
                    pDef->name, pSource->filename);
@@ -7434,7 +7439,17 @@ void Cmd_RenderMesh() {
         def.numOverrides++;
     }
 
+    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s)\n",
+        def.name, def.filename, (int)def.defaultState,
+        def.numOverrides, def.numOverrides == 1 ? "" : "s");
     g_numRendermeshDefs++;
+}
+
+void ReportUnusedRenderMeshDefs() {
+    for (int i = 0; i < g_numRendermeshDefs; i++) {
+        if (!g_rendermeshDefs[i].used)
+            MdlWarning("$rendermesh '%s' was defined but never used\n", g_rendermeshDefs[i].name);
+    }
 }
 
 
