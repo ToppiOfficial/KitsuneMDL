@@ -206,7 +206,7 @@ static DeltaState_t *FindOrAddDeltaState(const char *pDeltaStateName, int nBaseS
     int nCount = s_DeltaStates.Count();
     for (int i = 0; i < nCount; ++i) {
         if (!Q_stricmp(s_DeltaStates[i].m_Name, pDeltaStateName)) {
-            MdlWarning("Unsupported duplicate delta state named \"%s\" in DMX file\n", pDeltaStateName);
+            MdlWarning("Merging duplicate delta state \"%s\" across meshes\n", pDeltaStateName);
 
             s_DeltaStates[i].m_DeltaIndices.EnsureCount(nBaseStateVertexCount);
             return &s_DeltaStates[i];

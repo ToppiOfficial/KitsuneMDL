@@ -2070,6 +2070,11 @@ void AddBodyFlexRule(
         const CUtlVector<int> &pRawIndexToRemapSourceIndex,
         const CUtlVector<int> &pRawIndexToRemapLocalIndex,
         const CUtlVector<int> &pRemapSourceIndexToGlobalFlexControllerIndex) {
+    for (int j = 0; j < g_numflexrules; ++j) {
+        if (g_flexrule[j].flex == nFlexDesc)
+            return;
+    }
+
     if (g_numflexrules >= MAXSTUDIOFLEXRULES)
         MdlError("Line %d: Too many flex rules, max %d",
                  g_StudioMdlContext.iLinecount, MAXSTUDIOFLEXRULES);

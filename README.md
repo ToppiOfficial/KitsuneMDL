@@ -2,7 +2,7 @@
 
 > **Experimental**
 
-A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
+A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs) while remaining fully compatible with general studiomdl use cases. Based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
 
 Primarily tested with `DMX model 18`. Older versions may still work.
 
@@ -44,11 +44,11 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 - New `$staticproppose <animation_file> <frame>` to bake a custom pose into a `static_prop`'s geometry skeleton. Cannot be combined with `$staticprop`. **(Work in progress - does not behave as expected)**
 - New `$return <optional message>` to halt compilation with an optional message (similar to `$qcassert`)
 - New `$print <message>` for compile-time output
-- New `$deltaproportions` to generate `a_reference` and `a_proportions`. See `docs/deltaproportions.txt`
+- New `$deltaproportions` to generate `a_reference` and `a_proportions`. See `docs/deltaproportions.md`
 - New `$include` inline options:
   - `iffileexist` - silently skips the include if the file does not exist
   - `nofallbackdir` - disables the `-includedir` fallback for this include
-- `$model` can now be used inside `$bodygroup` blocks, enabling named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.txt`
+- `$model` can now be used inside `$bodygroup` blocks, enabling named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.md`
 - Recreated features from StudioMDL++ and NekoMDL:
   - `-cullanims` flag to strip unreferenced `$animation` blocks
   - Bone weight cull threshold reduced from 5% to 0.01%
