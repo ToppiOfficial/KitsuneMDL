@@ -27,8 +27,9 @@ extern StudioMdlContext g_StudioMdlContext;
 // $rendermesh: named filtered views of DMX files
 //-----------------------------------------------------------------------------
 
-#define MAX_RENDERMESH_DEFS      256
-#define MAX_RENDERMESH_OVERRIDES 128
+#define MAX_RENDERMESH_DEFS             256
+#define MAX_RENDERMESH_OVERRIDES        128
+#define MAX_RENDERMESH_MATERIAL_REMOVES  64
 
 struct s_rendermesh_override_t {
     char meshName[MAXSTUDIONAME];
@@ -40,6 +41,8 @@ struct s_rendermesh_def_t {
     bool defaultState;
     s_rendermesh_override_t overrides[MAX_RENDERMESH_OVERRIDES];
     int numOverrides;
+    char removeMaterials[MAX_RENDERMESH_MATERIAL_REMOVES][MAXSTUDIONAME];
+    int numRemoveMaterials;
     bool used;
 };
 
@@ -54,7 +57,9 @@ static s_rendermesh_def_t *FindRenderMeshDef(const char *name) {
 }
 
 static s_source_t *CloneSourceGeometry(s_source_t *pOrig);
+static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bool> &keepFace);
 static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate);
+static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 
 //-----------------------------------------------------------------------------
@@ -7169,31 +7174,9 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
     return pClone;
 }
 
-static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate) {
-    if (pSource->m_FaceDmeMeshIdx.IsEmpty() || pSource->numfaces == 0)
-        return;
-
-    // Build filter mask: which DmeMesh indices match the provided names
-    int numDmeMeshes = pSource->m_DmeMeshNames.Count();
-    CUtlVector<bool> inFilterSet;
-    inFilterSet.SetSize(numDmeMeshes);
-    for (int i = 0; i < numDmeMeshes; i++) inFilterSet[i] = false;
-    for (int k = 0; k < meshNames.Count(); k++) {
-        for (int j = 0; j < numDmeMeshes; j++) {
-            if (!Q_strcmp(meshNames[k], pSource->m_DmeMeshNames[j])) { inFilterSet[j] = true; break; }
-        }
-    }
-
-    // Decide which faces to keep
-    CUtlVector<bool> keepFace;
-    keepFace.SetSize(pSource->numfaces);
-    for (int i = 0; i < pSource->numfaces; i++) {
-        int16_t dmeMeshIdx = pSource->m_FaceDmeMeshIdx[i];
-        bool inSet = (dmeMeshIdx >= 0 && dmeMeshIdx < numDmeMeshes) && inFilterSet[dmeMeshIdx];
-        keepFace[i] = isIsolate ? inSet : !inSet;
-    }
-
-    // Rebuild vertex and face arrays per material
+// Rebuilds vertex/face/mesh arrays from a keepFace boolean mask.
+// Also remaps vertex animations and rebuilds m_GlobalVertices.
+static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bool> &keepFace) {
     CUtlVector<s_vertexinfo_t> newVerts;
     CUtlVector<s_face_t> newFaces;
     CUtlVector<int16_t> newFaceDmeMeshIdx;
@@ -7322,48 +7305,130 @@ static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString>
         MdlWarning("$rendermesh: filter produced empty mesh for '%s'\n", pSource->filename);
 }
 
+static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate) {
+    if (pSource->m_FaceDmeMeshIdx.IsEmpty() || pSource->numfaces == 0)
+        return;
+
+    // Build filter mask: which DmeMesh indices match the provided names
+    int numDmeMeshes = pSource->m_DmeMeshNames.Count();
+    CUtlVector<bool> inFilterSet;
+    inFilterSet.SetSize(numDmeMeshes);
+    for (int i = 0; i < numDmeMeshes; i++) inFilterSet[i] = false;
+    for (int k = 0; k < meshNames.Count(); k++) {
+        for (int j = 0; j < numDmeMeshes; j++) {
+            if (!Q_strcmp(meshNames[k], pSource->m_DmeMeshNames[j])) { inFilterSet[j] = true; break; }
+        }
+    }
+
+    // Decide which faces to keep
+    CUtlVector<bool> keepFace;
+    keepFace.SetSize(pSource->numfaces);
+    for (int i = 0; i < pSource->numfaces; i++) {
+        int16_t dmeMeshIdx = pSource->m_FaceDmeMeshIdx[i];
+        bool inSet = (dmeMeshIdx >= 0 && dmeMeshIdx < numDmeMeshes) && inFilterSet[dmeMeshIdx];
+        keepFace[i] = isIsolate ? inSet : !inSet;
+    }
+
+    RebuildGeometryFromKeepMask(pSource, keepFace);
+}
+
+static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *pDef) {
+    if (pSource->numfaces == 0)
+        return;
+
+    // Warn for any removematerial entry that doesn't match a mesh slot in this source
+    for (int k = 0; k < pDef->numRemoveMaterials; k++) {
+        bool found = false;
+        for (int m = 0; m < MAXSTUDIOSKINS && !found; m++) {
+            if (pSource->mesh[m].numfaces == 0) continue;
+            if (m >= g_nummaterials) continue;
+            if (Q_stricmp(g_texture[g_material[m]].name, pDef->removeMaterials[k]) == 0)
+                found = true;
+        }
+        if (!found)
+            MdlWarning("$rendermesh '%s': removematerial '%s' not found in source '%s'\n",
+                       pDef->name, pDef->removeMaterials[k], pSource->filename);
+    }
+
+    // Build keepFace mask: false for any face in a mesh slot whose material matches
+    CUtlVector<bool> keepFace;
+    keepFace.SetSize(pSource->numfaces);
+    for (int i = 0; i < pSource->numfaces; i++) keepFace[i] = true;
+
+    bool anyRemoved = false;
+    for (int m = 0; m < MAXSTUDIOSKINS; m++) {
+        if (pSource->mesh[m].numfaces == 0) continue;
+        if (m >= g_nummaterials) continue;
+        const char *matName = g_texture[g_material[m]].name;
+
+        bool remove = false;
+        for (int k = 0; k < pDef->numRemoveMaterials && !remove; k++) {
+            if (Q_stricmp(matName, pDef->removeMaterials[k]) == 0)
+                remove = true;
+        }
+        if (!remove) continue;
+
+        Msg("$rendermesh '%s': removing faces with material '%s'\n", pDef->name, matName);
+        int fOffset = pSource->mesh[m].faceoffset;
+        int numF    = pSource->mesh[m].numfaces;
+        for (int fi = fOffset; fi < fOffset + numF; fi++)
+            keepFace[fi] = false;
+        anyRemoved = true;
+    }
+
+    if (anyRemoved)
+        RebuildGeometryFromKeepMask(pSource, keepFace);
+}
 
 static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef) {
     pDef->used = true;
-    Msg("$rendermesh '%s': applying to '%s' (%d mesh override%s)\n",
-        pDef->name, pSource->filename, pDef->numOverrides, pDef->numOverrides == 1 ? "" : "s");
+    Msg("$rendermesh '%s': applying to '%s' (%d mesh override%s, %d removematerial%s)\n",
+        pDef->name, pSource->filename,
+        pDef->numOverrides, pDef->numOverrides == 1 ? "" : "s",
+        pDef->numRemoveMaterials, pDef->numRemoveMaterials == 1 ? "" : "s");
 
-    if (pSource->m_DmeMeshNames.IsEmpty()) {
-        MdlWarning("$rendermesh '%s': source '%s' has no DmeMesh tracking data (not a DMX?), skipping filter\n",
-                   pDef->name, pSource->filename);
-        return;
-    }
-
-    // Validate override mesh names exist in the source
-    for (int j = 0; j < pDef->numOverrides; j++) {
-        bool found = false;
-        for (int k = 0; k < pSource->m_DmeMeshNames.Count(); k++) {
-            if (!Q_strcmp(pDef->overrides[j].meshName, pSource->m_DmeMeshNames[k])) { found = true; break; }
-        }
-        if (!found) {
-            char available[1024] = "";
-            for (int k = 0; k < pSource->m_DmeMeshNames.Count(); k++) {
-                Q_strncat(available, pSource->m_DmeMeshNames[k].Get(), sizeof(available));
-                if (k < pSource->m_DmeMeshNames.Count() - 1) Q_strncat(available, ", ", sizeof(available));
+    // Apply DmeMesh filter (requires DmeMesh tracking in the source)
+    if (pDef->numOverrides > 0) {
+        if (pSource->m_DmeMeshNames.IsEmpty()) {
+            MdlWarning("$rendermesh '%s': source '%s' has no DmeMesh tracking data (not a DMX?), mesh overrides ignored\n",
+                       pDef->name, pSource->filename);
+        } else {
+            // Validate override mesh names exist in the source
+            for (int j = 0; j < pDef->numOverrides; j++) {
+                bool found = false;
+                for (int k = 0; k < pSource->m_DmeMeshNames.Count(); k++) {
+                    if (!Q_strcmp(pDef->overrides[j].meshName, pSource->m_DmeMeshNames[k])) { found = true; break; }
+                }
+                if (!found) {
+                    char available[1024] = "";
+                    for (int k = 0; k < pSource->m_DmeMeshNames.Count(); k++) {
+                        Q_strncat(available, pSource->m_DmeMeshNames[k].Get(), sizeof(available));
+                        if (k < pSource->m_DmeMeshNames.Count() - 1) Q_strncat(available, ", ", sizeof(available));
+                    }
+                    MdlError("$rendermesh '%s': DmeMesh '%s' not found in '%s'\n  Available: %s\n",
+                             pDef->name, pDef->overrides[j].meshName, pSource->filename, available);
+                }
             }
-            MdlError("$rendermesh '%s': DmeMesh '%s' not found in '%s'\n  Available: %s\n",
-                     pDef->name, pDef->overrides[j].meshName, pSource->filename, available);
+
+            // defaultState=0: listed meshes are kept (isolate). defaultState=1: listed meshes are dropped (exclude).
+            CUtlVector<CUtlString> filterMeshes;
+            bool isIsolate = !pDef->defaultState;
+            for (int j = 0; j < pDef->numOverrides; j++)
+                filterMeshes.AddToTail(pDef->overrides[j].meshName);
+
+            if (filterMeshes.IsEmpty()) {
+                // defaultState=0 with no listed meshes produces nothing; defaultState=1 keeps all (no-op)
+                if (!pDef->defaultState)
+                    MdlWarning("$rendermesh '%s': defaultState=0 with no listed meshes produces an empty model\n", pDef->name);
+            } else {
+                ApplyDmeMeshFilter(pSource, filterMeshes, isIsolate);
+            }
         }
     }
 
-    // defaultState=0: listed meshes are kept (isolate). defaultState=1: listed meshes are dropped (exclude).
-    CUtlVector<CUtlString> filterMeshes;
-    bool isIsolate = !pDef->defaultState;
-    for (int j = 0; j < pDef->numOverrides; j++)
-        filterMeshes.AddToTail(pDef->overrides[j].meshName);
-
-    if (filterMeshes.IsEmpty()) {
-        if (!pDef->defaultState)
-            MdlWarning("$rendermesh '%s': defaultState=0 with no listed meshes produces an empty model\n", pDef->name);
-        return;
-    }
-
-    ApplyDmeMeshFilter(pSource, filterMeshes, isIsolate);
+    // Apply material remove filter (works independently of DmeMesh tracking)
+    if (pDef->numRemoveMaterials > 0)
+        ApplyMaterialRemoveFilter(pSource, pDef);
 }
 
 void Cmd_RenderMesh() {
@@ -7402,17 +7467,25 @@ void Cmd_RenderMesh() {
         if (endofscript) TokenError("$rendermesh '%s': unexpected end of file\n", def.name);
         if (token[0] == '}') break;
 
-        if (def.numOverrides >= MAX_RENDERMESH_OVERRIDES)
-            MdlError("$rendermesh '%s': too many mesh overrides (max %d)\n", def.name, MAX_RENDERMESH_OVERRIDES);
-
-        Q_strncpy(def.overrides[def.numOverrides].meshName, token,
-                  sizeof(def.overrides[def.numOverrides].meshName));
-        def.numOverrides++;
+        if (Q_stricmp(token, "removematerial") == 0) {
+            if (def.numRemoveMaterials >= MAX_RENDERMESH_MATERIAL_REMOVES)
+                MdlError("$rendermesh '%s': too many removematerial entries (max %d)\n", def.name, MAX_RENDERMESH_MATERIAL_REMOVES);
+            GetToken(false);
+            Q_strncpy(def.removeMaterials[def.numRemoveMaterials], token, MAXSTUDIONAME);
+            def.numRemoveMaterials++;
+        } else {
+            if (def.numOverrides >= MAX_RENDERMESH_OVERRIDES)
+                MdlError("$rendermesh '%s': too many mesh overrides (max %d)\n", def.name, MAX_RENDERMESH_OVERRIDES);
+            Q_strncpy(def.overrides[def.numOverrides].meshName, token,
+                      sizeof(def.overrides[def.numOverrides].meshName));
+            def.numOverrides++;
+        }
     }
 
-    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s)\n",
+    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s)\n",
         def.name, def.filename, (int)def.defaultState,
-        def.numOverrides, def.numOverrides == 1 ? "" : "s");
+        def.numOverrides, def.numOverrides == 1 ? "" : "s",
+        def.numRemoveMaterials, def.numRemoveMaterials == 1 ? "" : "s");
     g_numRendermeshDefs++;
 }
 

@@ -39,7 +39,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 - `$addsearchdir` now correctly applies to SMD/DMX source file lookup
 - New `ignorescale` parameter for `$animation` and `$sequence`
 - New `$driverbone` and `driverlookat` commands to define procedural bones without VRD files
-- New `$rendermesh` for DMX models containing multiple DMEMesh elements
+- New `$rendermesh` to filter source geometry by DmeMesh object name or by material name; DmeMesh filtering requires DMX, `removematerial` works on any source format
 - New `$if`, `$elif`, `$else`, and `$switch` conditional commands
 - New `$staticproppose <animation_file> <frame>` to bake a custom pose into a `static_prop`'s geometry skeleton. Cannot be combined with `$staticprop`. **(Work in progress - does not behave as expected)**
 - New `$return <optional message>` to halt compilation with an optional message (similar to `$qcassert`)
