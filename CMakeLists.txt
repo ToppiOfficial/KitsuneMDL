@@ -87,3 +87,5 @@ target_link_libraries(kitsunemdl PRIVATE
         minicollision
         )
 
+set_property(TARGET kitsunemdl PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+

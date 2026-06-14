@@ -294,7 +294,7 @@ bool CDmePackVMatrixOperator::IsDirty()
 	const VMatrix &v = m_vmatrix.Get();
 	for ( uint i = 0; i < 16; ++i )
 	{
-		if ( *( v[ i ] ) != m_cells[ i ].Get() )
+		if ( v[ i >> 2 ][ i & 3 ] != m_cells[ i ].Get() )
 			return true;
 	}
 	return false;
@@ -305,7 +305,7 @@ void CDmePackVMatrixOperator::Operate()
 	VMatrix v;
 	for ( uint i = 0; i < 16; ++i )
 	{
-		*( v[ i ] ) = m_cells[ i ].Get();
+		v[ i >> 2 ][ i & 3 ] = m_cells[ i ].Get();
 	}
 	m_vmatrix.Set( v );
 }

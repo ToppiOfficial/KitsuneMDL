@@ -32,7 +32,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
   - It is referenced by `$bonemerge`
   - It is a BoneFlexDriver target
 - `$definevariable` now works inside quotation marks (`$definemacro` does not)
-- Multiple engine branch support; use `-newvtx` for the Alien Swarm to CS:GO engine branch (minimum supported branch is likely TF2 or SourceSDK2013)
+- Multiple engine branch support; use `-vtxformat 1` for the Alien Swarm/CS:GO engine branch VTX format (default 0 = TF2/L4D2; minimum supported branch is likely TF2 or SourceSDK2013)
 - Variables can be defined outside of QC via `-defvar <name> <value>` (repeatable)
 - `$include` supports a fallback search directory via `-includedir <dir>` (repeatable)
 - DirectX 8 compile support, opt-out with `-nodx80` (similar to StudioMDL++)
@@ -55,6 +55,12 @@ Primarily tested with `DMX model 18`. Older versions may still work.
   - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, and VTA flex deltas
   - `$renamebone` now propagates to the collision model
   - Fixed crash with blank bodygroup combined with `$staticprop`
+
+## TODO
+
+- Fix mesh splitting with flex data - currently produces corrupted or broken output on models with shape keys or flex controllers
+- Fully test `$collisionmodel` and `$collisionjoints` pipeline against official Valve studiomdl output to validate accuracy
+- Linux native support
 
 ## Credits
 
