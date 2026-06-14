@@ -43,6 +43,10 @@ qboolean GetToken (qboolean crossline);
 qboolean GetExprToken (qboolean crossline);
 void UnGetToken (void);
 qboolean TokenAvailable (void);
+// Non-destructive lookahead: copies the next real token into buffer without
+// consuming any input or disturbing the tokenready/token globals. Returns the
+// pending token if one was UnGetToken'd. Returns false at end of script.
+qboolean PeekToken (char *buffer, int bufferSize);
 qboolean GetTokenizerStatus( char **pFilename, int *pLine );
 
 // SCRIPT_LOADED_CALLBACK:

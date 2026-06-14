@@ -1005,6 +1005,12 @@ void ParseFromMemory (char *buffer, int size)
 // Used instead of ParseFromMemory to temporarily add a memory buffer
 // to the script stack.  ParseFromMemory just blows away the stack.
 //-----------------------------------------------------------------------------
+// Saved unget state (tokenready + token buffer) for each pushed memory script,
+// indexed by stack frame. Lets a pending UnGetToken survive reentrant memory-script
+// parsing (e.g. flex-rule evaluation during a source load) instead of being clobbered.
+static qboolean s_savedTokenReady[MAX_INCLUDES];
+static char     s_savedToken[MAX_INCLUDES][MAXTOKEN];
+
 void PushMemoryScript( char *pszBuffer, const int nSize )
 {
 	if ( script == NULL )
@@ -1022,6 +1028,12 @@ void PushMemoryScript( char *pszBuffer, const int nSize )
 	script->line = 1;
 	script->script_p = script->buffer;
 	script->end_p = script->buffer + nSize;
+
+	// remember any pending UnGetToken belonging to the parent context so it can be
+	// restored when this memory script is popped
+	int frame = (int)(script - scriptstack);
+	s_savedTokenReady[frame] = tokenready;
+	Q_strncpy( s_savedToken[frame], token, sizeof( s_savedToken[frame] ) );
 
 	endofscript = false;
 	tokenready = false;
@@ -1044,6 +1056,13 @@ bool PopMemoryScript()
 		endofscript = true;
 		return false;
 	}
+
+	// restore any pending UnGetToken that belonged to the parent context
+	int frame = (int)(script - scriptstack);
+	tokenready = s_savedTokenReady[frame];
+	if ( tokenready )
+		Q_strncpy( token, s_savedToken[frame], MAXTOKEN );
+
 	script--;
 	scriptline = script->line;
 
@@ -1506,6 +1525,63 @@ qboolean TokenAvailable ()
 		return false;
 
 	return true;
+}
+
+/*
+==============
+PeekToken
+
+Non-destructive lookahead: copies the next real token (skipping whitespace and
+//, #, ; and slash-star comments, crossing line boundaries) into buffer WITHOUT
+advancing script_p and WITHOUT touching the tokenready/token globals. If a token
+is already pending from UnGetToken it returns that. Returns true if a token was
+found, false at end of script.
+
+Word boundaries match GetToken (a token runs until whitespace or ';'), so e.g.
+'{' on its own is returned as "{".
+==============
+*/
+qboolean PeekToken( char *buffer, int bufferSize )
+{
+	if ( bufferSize > 0 )
+		buffer[0] = '\0';
+
+	if ( tokenready )                         // pending UnGetToken
+	{
+		Q_strncpy( buffer, token, bufferSize );
+		return true;
+	}
+
+	if ( !script )
+		return false;
+
+	const char *p = script->script_p;
+	while ( p < script->end_p )
+	{
+		if ( (unsigned char)*p <= ' ' ) { p++; continue; }
+		if ( (*p == '/' && p+1 < script->end_p && *(p+1) == '/') || *p == '#' || *p == ';' )
+		{
+			while ( p < script->end_p && *p != '\n' ) p++;
+			continue;
+		}
+		if ( *p == '/' && p+1 < script->end_p && *(p+1) == '*' )
+		{
+			p += 2;
+			while ( p+1 < script->end_p && !(*p == '*' && *(p+1) == '/') ) p++;
+			if ( p+1 < script->end_p ) p += 2;
+			continue;
+		}
+		break;
+	}
+
+	if ( p >= script->end_p )
+		return false;
+
+	int len = 0;
+	while ( p < script->end_p && (unsigned char)*p > ' ' && *p != ';' && len < bufferSize - 1 )
+		buffer[len++] = *p++;
+	buffer[len] = '\0';
+	return len > 0;
 }
 
 qboolean GetTokenizerStatus( char **pFilename, int *pLine )

@@ -18,6 +18,7 @@ $rendermesh <name> <file> <defaultState> {
     ...
     removematerial "<materialName>"
     ...
+    nofacial
 }
 ```
 
@@ -64,6 +65,20 @@ individual materials from the result.
 `removematerial` does not require DmeMesh tracking data and works on any
 source format (DMX, SMD, OBJ, VRM). It runs after the DmeMesh mesh filter
 when both are present.
+
+**`nofacial`** (optional, no argument)
+
+Strips all facial data from this clone only: every flex controller, flex
+rule, flex key, combination control/rule, and vertex-animation delta is
+removed before the model is processed. The result compiles as if the source
+had no shape keys or flex controllers at all. This is unique to the clone -
+the underlying source file and any other `$rendermesh` definitions or plain
+`$body`/`$model` references to the same file are unaffected.
+
+Use this to produce a flex-free variant of a facial model (e.g. a distant
+LOD or a bodygroup part that does not need expressions) without editing the
+source DMX. It works on any source format and is applied after the DmeMesh
+and `removematerial` filters.
 
 ## Usage in $body / $bodygroup / $model
 
@@ -140,6 +155,16 @@ $rendermesh hair_clean "character.dmx" 0 {
 $body hair hair_clean
 ```
 
+Flex-free variant of a facial model (no flex controllers, rules, or deltas):
+
+```
+$rendermesh body_noflex "character.dmx" 1 {
+    nofacial
+}
+
+$body body body_noflex
+```
+
 ## Notes
 
 - `$rendermesh` is a definition only; it does not load the source file at parse
@@ -155,3 +180,13 @@ $body hair hair_clean
 - DmeMesh filtering (`"<meshName>"` entries) is DMX-only. Listing mesh names
   for an SMD/OBJ/VRM source will warn and skip that part; `removematerial`
   entries on the same definition still apply normally.
+- `nofacial` affects only the clone produced by this `$rendermesh` definition.
+  The source file's flex data is left intact for every other reference.
+- Any `$definevariable` referenced by a DMX flex-rule expression (a `$var$` token
+  inside a DmeFlexRule) must be declared before the first
+  `$body`/`$bodygroup`/`$model` that loads that DMX - including the first
+  reference made through a `$rendermesh` alias. A DMX's flex rules are compiled
+  once, at the file's first load, so a `$definevariable` placed after that first
+  reference is not yet known and the compile aborts with a "is not defined yet"
+  error. Move the `$definevariable` block above the first reference (or pass the
+  value via `-defvar`).

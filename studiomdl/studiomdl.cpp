@@ -1146,7 +1146,6 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
             }
         }
 
-        CUtlString sOldToken = token;
         CUtlString sTmpBuf;
 
         // %otherRule cross-references within the same CDmeFlexRules resolve correctly.
@@ -1270,8 +1269,12 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
                         if (pVarValue) {
                             sExpanded += pVarValue;
                         } else {
-                            MdlError("DMX flex rule '%s': $%s$ is not defined\n",
-                                     pDmeFlexRule->GetName(), szVarName);
+                            MdlError("DMX flex rule '%s': $%s$ is not defined yet.\n"
+                                     "  '%s' references this variable in a flex rule, but the DMX is loaded\n"
+                                     "  (and its flex rules compiled) at the first $body/$bodygroup/$model that\n"
+                                     "  uses it. Move the matching $definevariable above that first reference\n"
+                                     "  (or define it via -defvar).\n",
+                                     pDmeFlexRule->GetName(), szVarName, pSource->filename);
                             return;
                         }
                         p = pVarEnd + 1;
@@ -1297,9 +1300,6 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
         }
 
         BuildCombinationSourceData(pSource, pCombination);
-
-        V_strncpy(token, sOldToken.Get(), ARRAYSIZE(token));
-        UnGetToken();
 
         return;
     }

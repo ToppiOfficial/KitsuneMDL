@@ -43,7 +43,9 @@ struct s_rendermesh_def_t {
     int numOverrides;
     char removeMaterials[MAX_RENDERMESH_MATERIAL_REMOVES][MAXSTUDIONAME];
     int numRemoveMaterials;
+    bool noFacial;          // strip all flex controllers, flex rules and deltas from this clone
     bool used;
+    s_source_t *pOwnedSource;
 };
 
 static s_rendermesh_def_t g_rendermeshDefs[MAX_RENDERMESH_DEFS];
@@ -60,6 +62,7 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig);
 static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bool> &keepFace);
 static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate);
 static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
+static void ApplyNoFacialFilter(s_source_t *pSource);
 static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 
 //-----------------------------------------------------------------------------
@@ -116,6 +119,15 @@ bool ParseOptionStudio(CDmeSourceSkin *pSkin) {
 
     pSkin->SetRelativeFileName(token);
     while (TokenAvailable()) {
+        // Stop at the '{' that opens a following model-option block WITHOUT consuming it.
+        // The source load that happens after this (ProcessOptionStudio) re-enters the
+        // tokenizer for DMX flex rules, which would clobber an UnGetToken'd '{'. Leaving
+        // the brace physically in the stream lets Option_Model find it reliably.
+        {
+            char peek[MAXTOKEN];
+            if (PeekToken(peek, sizeof(peek)) && !Q_stricmp("{", peek))
+                break;
+        }
         GetToken(false);
         if (!Q_stricmp("reverse", token)) {
             pSkin->m_bFlipTriangles = true;
@@ -144,11 +156,6 @@ bool ParseOptionStudio(CDmeSourceSkin *pSkin) {
             continue;
         }
 
-        if (!Q_stricmp("{", token)) {
-            UnGetToken();
-            break;
-        }
-
         MdlError("unknown command \"%s\"\n", token);
         return false;
     }
@@ -173,15 +180,28 @@ void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale
     }
 
     g_pCurrentModel = pmodel;
-    pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true);
+
+    if (!pRenderMeshDef) {
+        pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true);
+    } else {
+        if (!pRenderMeshDef->pOwnedSource) {
+            // First use of this def: load raw from cache (read-only), clone it immediately
+            // so the cache is never mutated, then process and filter on the private copy.
+            s_source_t *pRaw = Load_Source(pmodel->filename, "", bFlipTriangles, true);
+            if (pRaw) {
+                s_source_t *pOwned = CloneSourceGeometry(pRaw);
+                ApplyRenderMeshFilter(pOwned, pRenderMeshDef);
+                pRenderMeshDef->pOwnedSource = pOwned;
+            }
+        }
+        // Each model use gets its own clone of the pre-processed owned source.
+        pmodel->source = pRenderMeshDef->pOwnedSource
+            ? CloneSourceGeometry(pRenderMeshDef->pOwnedSource)
+            : nullptr;
+    }
+
     g_pCurrentModel = NULL;
     g_currentscale = g_defaultscale;
-
-    if (pRenderMeshDef && pmodel->source) {
-        s_source_t *pClone = CloneSourceGeometry(pmodel->source);
-        pmodel->source = pClone;
-        ApplyRenderMeshFilter(pClone, pRenderMeshDef);
-    }
 }
 
 //-----------------------------------------------------------------------------
@@ -3227,12 +3247,17 @@ static void Cmd_ReplaceModel(LodScriptData_t &lodData) {
     if (!lodData.IsStrippedFromModel()) {
         s_rendermesh_def_t *pDstRmDef = FindRenderMeshDef(newReplacement.GetDstName());
         if (pDstRmDef) {
-            s_source_t *pSrc = Load_Source(pDstRmDef->filename, "", reverse, false);
-            if (pSrc) {
-                s_source_t *pClone = CloneSourceGeometry(pSrc);
-                ApplyRenderMeshFilter(pClone, pDstRmDef);
-                newReplacement.m_pSource = pClone;
+            if (!pDstRmDef->pOwnedSource) {
+                s_source_t *pRaw = Load_Source(pDstRmDef->filename, "", reverse, false);
+                if (pRaw) {
+                    s_source_t *pOwned = CloneSourceGeometry(pRaw);
+                    ApplyRenderMeshFilter(pOwned, pDstRmDef);
+                    pDstRmDef->pOwnedSource = pOwned;
+                }
             }
+            newReplacement.m_pSource = pDstRmDef->pOwnedSource
+                ? CloneSourceGeometry(pDstRmDef->pOwnedSource)
+                : nullptr;
         } else {
             newReplacement.m_pSource = Load_Source(newReplacement.GetDstName(), "", reverse, false);
         }
@@ -7151,9 +7176,11 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
         memcpy(pClone->face, pOrig->face, pOrig->numfaces * sizeof(s_face_t));
 
     // Re-init tracking vectors with independent copies so filters don't interfere.
-    // m_GlobalVertices is zeroed here (abandoning the shared ref without freeing pOrig's buffer);
-    // ApplyDmeMeshFilter will rebuild it from the compacted vertex set.
+    // m_GlobalVertices is copied faithfully (drop the aliased ref without freeing pOrig's
+    // buffer, then deep-copy). When the filter changes geometry, RebuildGeometryFromKeepMask
+    // RemoveAll()s and rebuilds it; for a no-op filter this copy is the correct final state.
     memset(&pClone->m_GlobalVertices, 0, sizeof(pClone->m_GlobalVertices));
+    pClone->m_GlobalVertices.AddVectorToTail(pOrig->m_GlobalVertices);
     memset(&pClone->m_FaceDmeMeshIdx, 0, sizeof(pClone->m_FaceDmeMeshIdx));
     pClone->m_FaceDmeMeshIdx.AddVectorToTail(pOrig->m_FaceDmeMeshIdx);
     memset(&pClone->m_DmeMeshNames, 0, sizeof(pClone->m_DmeMeshNames));
@@ -7200,6 +7227,22 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
     pClone->m_FlexControllerRemaps.SetCount(pOrig->m_FlexControllerRemaps.Count());
     for (int i = 0; i < pOrig->m_FlexControllerRemaps.Count(); i++)
         pClone->m_FlexControllerRemaps[i] = pOrig->m_FlexControllerRemaps[i];
+
+    // Deep-copy attachments. Without this they stay aliased to pOrig's buffer and
+    // AddBodyAttachments() (via PostProcessSource) reads from the shared buffer.
+    memset(&pClone->m_Attachments, 0, sizeof(pClone->m_Attachments));
+    pClone->m_Attachments.AddVectorToTail(pOrig->m_Attachments);
+
+    // Reset the post-process-derived fields so the clone is treated as a virgin,
+    // never-post-processed source. These are written by AddBodyFlexData/AddBodyFlexRules
+    // (m_nKeyStartIndex, the raw->remap index tables, and the L/R global flex controller
+    // index tables). Leaving them aliased to pOrig (which may already have been
+    // post-processed as a plain $body) would carry stale indices and double-register.
+    pClone->m_nKeyStartIndex = 0;
+    memset(&pClone->m_rawIndexToRemapSourceIndex, 0, sizeof(pClone->m_rawIndexToRemapSourceIndex));
+    memset(&pClone->m_rawIndexToRemapLocalIndex, 0, sizeof(pClone->m_rawIndexToRemapLocalIndex));
+    memset(&pClone->m_leftRemapIndexToGlobalFlexControllIndex, 0, sizeof(pClone->m_leftRemapIndexToGlobalFlexControllIndex));
+    memset(&pClone->m_rightRemapIndexToGlobalFlexControllIndex, 0, sizeof(pClone->m_rightRemapIndexToGlobalFlexControllIndex));
 
     return pClone;
 }
@@ -7410,6 +7453,39 @@ static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *p
         RebuildGeometryFromKeepMask(pSource, keepFace);
 }
 
+// Strips all facial data from a (cloned) source: flex keys, combination controls/rules,
+// flex controller remaps, and the vertex-animation deltas. With these cleared,
+// AddBodyFlexData / AddBodyFlexRules (run later via PostProcessSource) register no flex
+// controllers, flex rules, or flex keys for this source, so the result has no facial flexing.
+static void ApplyNoFacialFilter(s_source_t *pSource) {
+    int nFlexKeys = pSource->m_FlexKeys.Count();
+
+    pSource->m_FlexKeys.RemoveAll();
+    pSource->m_CombinationControls.RemoveAll();
+    pSource->m_CombinationRules.RemoveAll();
+    pSource->m_FlexControllerRemaps.RemoveAll();
+    pSource->bNoAutoDMXRules = true;
+
+    // Free and drop the vertex-animation deltas. The clone owns its vanim[] buffers
+    // (CloneSourceGeometry malloc'd independent copies), so freeing them is safe; the
+    // remaining vanim_map/vanim_flag pointers are still aliased to the original and are
+    // left untouched. rawanim (skeletal/bind pose) is preserved.
+    for (int a = 0; a < pSource->m_Animations.Count(); a++) {
+        s_sourceanim_t &anim = pSource->m_Animations[a];
+        for (int fr = 0; fr < MAXSTUDIOANIMFRAMES; fr++) {
+            if (anim.vanim[fr]) {
+                free(anim.vanim[fr]);
+                anim.vanim[fr] = nullptr;
+            }
+            anim.numvanims[fr] = 0;
+        }
+        anim.newStyleVertexAnimations = false;
+    }
+
+    Msg("$rendermesh: nofacial - stripped %d flex key%s and all flex rules/deltas from '%s'\n",
+        nFlexKeys, nFlexKeys == 1 ? "" : "s", pSource->filename);
+}
+
 static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef) {
     pDef->used = true;
     Msg("$rendermesh '%s': applying to '%s' (%d mesh override%s, %d removematerial%s)\n",
@@ -7459,6 +7535,14 @@ static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef)
     // Apply material remove filter (works independently of DmeMesh tracking)
     if (pDef->numRemoveMaterials > 0)
         ApplyMaterialRemoveFilter(pSource, pDef);
+
+    // Strip facial data (flex controllers/rules/deltas) if requested
+    if (pDef->noFacial)
+        ApplyNoFacialFilter(pSource);
+
+    if (pSource->numfaces == 0)
+        MdlError("$rendermesh '%s': filter produced a 0-polygon mesh from '%s' - check mesh names and defaultState\n",
+                 pDef->name, pSource->filename);
 }
 
 void Cmd_RenderMesh() {
@@ -7503,6 +7587,8 @@ void Cmd_RenderMesh() {
             GetToken(false);
             Q_strncpy(def.removeMaterials[def.numRemoveMaterials], token, MAXSTUDIONAME);
             def.numRemoveMaterials++;
+        } else if (Q_stricmp(token, "nofacial") == 0) {
+            def.noFacial = true;
         } else {
             if (def.numOverrides >= MAX_RENDERMESH_OVERRIDES)
                 MdlError("$rendermesh '%s': too many mesh overrides (max %d)\n", def.name, MAX_RENDERMESH_OVERRIDES);
@@ -7512,10 +7598,11 @@ void Cmd_RenderMesh() {
         }
     }
 
-    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s)\n",
+    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s%s)\n",
         def.name, def.filename, (int)def.defaultState,
         def.numOverrides, def.numOverrides == 1 ? "" : "s",
-        def.numRemoveMaterials, def.numRemoveMaterials == 1 ? "" : "s");
+        def.numRemoveMaterials, def.numRemoveMaterials == 1 ? "" : "s",
+        def.noFacial ? ", nofacial" : "");
     g_numRendermeshDefs++;
 }
 
