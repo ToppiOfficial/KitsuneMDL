@@ -4241,10 +4241,26 @@ bool ParseFlexibleJiggle(s_jigglebone_t *jiggleInfo) {
 // Parse $jigglebone parameters
 //
 void Cmd_JiggleBone() {
-    struct s_jigglebone_t *jiggleInfo = &g_jigglebones[g_numjigglebones];
-
     // bone name
     GetToken(false);
+
+    // If this bone already has a jigglebone definition, overwrite it in place
+    // (last definition wins) instead of appending an orphaned duplicate entry.
+    struct s_jigglebone_t *jiggleInfo = NULL;
+    bool isDuplicate = false;
+    for (int i = 0; i < g_numjigglebones; ++i) {
+        if (!stricmp(token, g_jigglebones[i].bonename)) {
+            MdlWarning("$jigglebone: '%s' already defined, overwriting previous definition\n", token);
+            jiggleInfo = &g_jigglebones[i];
+            isDuplicate = true;
+            break;
+        }
+    }
+
+    if (!isDuplicate) {
+        jiggleInfo = &g_jigglebones[g_numjigglebones];
+    }
+
     strcpyn(jiggleInfo->bonename, token);
 
     // default values
@@ -4297,7 +4313,8 @@ void Cmd_JiggleBone() {
     if (!g_StudioMdlContext.quiet)
         Msg("Marking bone %s as a jiggle bone\n", jiggleInfo->bonename);
 
-    g_numjigglebones++;
+    if (!isDuplicate)
+        g_numjigglebones++;
 }
 
 
