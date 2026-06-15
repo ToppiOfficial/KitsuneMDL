@@ -1344,10 +1344,18 @@ static void UpdateChannels(CUtlVector<IDmeOperator *> &operators, CDmeChannelsCl
 //-----------------------------------------------------------------------------
 // Initialize the pose for this frame
 //-----------------------------------------------------------------------------
-static void ComputeFramePose(s_sourceanim_t *pSourceAnim, int nFrame, float flScale, BoneTransformMap_t &boneMap) {
-    pSourceAnim->rawanim[nFrame] = (s_bone_t *) calloc(boneMap.m_nBoneCount, sizeof(s_bone_t));
+static void ComputeFramePose(s_source_t *pSource, s_sourceanim_t *pSourceAnim, int nFrame, float flScale,
+                             BoneTransformMap_t &boneMap) {
+    // LoadSkeleton returns m_nBoneCount + 1 (it appends a default root), so
+    // pSource->numbones is one larger than boneMap.m_nBoneCount. BuildRawTransforms
+    // later iterates k < pSource->numbones, so the per-frame array must be sized for
+    // numbones - otherwise the trailing default-root slot is read past the end of the
+    // allocation (an intermittent EXCEPTION_ACCESS_VIOLATION). Allocate numbones and
+    // leave the unfilled root slot zero-initialized, matching LoadBindPose.
+    pSourceAnim->rawanim[nFrame] = (s_bone_t *) calloc(pSource->numbones, sizeof(s_bone_t));
 
-    for (int i = 0; i < boneMap.m_nBoneCount; ++i) {
+    const int nFillCount = MIN(boneMap.m_nBoneCount, pSource->numbones);
+    for (int i = 0; i < nFillCount; ++i) {
         matrix3x4_t jointTransform;
         boneMap.m_ppTransforms[i]->GetTransform(jointTransform);
         MatrixAngles(jointTransform, pSourceAnim->rawanim[nFrame][i].rot, pSourceAnim->rawanim[nFrame][i].pos);
@@ -1390,7 +1398,7 @@ LoadAnimations(s_source_t *pSource, CDmeAnimationList *pAnimationList, float flS
             int nFraction = nFrame - nSecond * nFrameRateVal;
             DmeTime_t t = nStartTime + DmeTime_t(nSecond * 10000) + DmeTime_t((float) nFraction * flOOFrameRate);
             UpdateChannels(operatorList, pAnimation, t);
-            ComputeFramePose(pSourceAnim, nFrame, flScale, boneMap);
+            ComputeFramePose(pSource, pSourceAnim, nFrame, flScale, boneMap);
             ++nFrame;
         }
     }

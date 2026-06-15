@@ -2447,7 +2447,7 @@ BuildVAnimMap(s_source_t *pVSource, s_sourceanim_t *pVSourceAnim, s_loddata_t *p
 //-----------------------------------------------------------------------------
 // Computes the number of unique desination vanims, allocates space for it
 //-----------------------------------------------------------------------------
-static void AllocateDestVAnim(s_flexkey_t &flexKey, s_sourceanim_t *pVSourceAnim) {
+static void AllocateDestVAnim(const s_source_t *pVSource, s_flexkey_t &flexKey, s_sourceanim_t *pVSourceAnim) {
     int nVAnimCount = pVSourceAnim->numvanims[flexKey.frame];
     s_vertanim_t *pVAnim = pVSourceAnim->vanim[flexKey.frame];
 
@@ -2459,6 +2459,10 @@ static void AllocateDestVAnim(s_flexkey_t &flexKey, s_sourceanim_t *pVSourceAnim
     // count total possible remapped animations
     int nNumDestVAnims = 0;
     for (int m = 0; m < nVAnimCount; m++) {
+        // vanim_mapcount is sized pVSource->numvertices; skip ids outside that range
+        // (must match the skip in the remap loop below so the allocation size agrees).
+        if (!IsValidVAnimVertex(pVSource, pVAnim[m].vertex))
+            continue;
         nNumDestVAnims += pVSourceAnim->vanim_mapcount[pVAnim[m].vertex];
     }
 
@@ -2558,7 +2562,7 @@ void RemapVertexAnimations() {
         pmLodSource = g_model[g_flexkey[i].imodel]->m_pLodData;
 
         // Allocate g_flexkey[i].vanim
-        AllocateDestVAnim(g_flexkey[i], pSourceAnim);
+        AllocateDestVAnim(pvsource, g_flexkey[i], pSourceAnim);
 
         s_vertanim_t *psrcanim = pSourceAnim->vanim[g_flexkey[i].frame];
         s_vertanim_t *pdestanim = g_flexkey[i].vanim;
@@ -2570,6 +2574,12 @@ void RemapVertexAnimations() {
             Vector delta, ndelta;
             float flSide, flScale;
             ComputeSideAndScale(g_flexkey[i], psrcanim, &flSide, &flScale);
+
+            // Skip vanim verts outside [0, numvertices) - they have no entry in the
+            // map arrays (sized numvertices). Must match the skip in AllocateDestVAnim
+            // above so we never write past the allocated dest buffer.
+            if (!IsValidVAnimVertex(pvsource, psrcanim->vertex))
+                continue;
 
             // bah, only do it for ones that found a match!
             if (flScale <= 0.0f || !pSourceAnim->vanim_mapcount[psrcanim->vertex])
@@ -2736,7 +2746,7 @@ static void RemapVertexAnimationsNewVersion() {
             continue;
 
         // Allocate g_flexkey[i].vanim
-        AllocateDestVAnim(g_flexkey[i], pVSourceAnim);
+        AllocateDestVAnim(pVSource, g_flexkey[i], pVSourceAnim);
 
         int nNumSrcVAnims = pVSourceAnim->numvanims[g_flexkey[i].frame];
         s_vertanim_t *pSrcVAnim = pVSourceAnim->vanim[g_flexkey[i].frame];
@@ -5982,10 +5992,22 @@ static void InitRemappedVertex(s_source_t *pSource, matrix3x4_t *pDestBoneToWorl
     vdest.Init();
     ndest.Init();
 
+    // numbones is capped at the per-vertex weight limit; a corrupted higher value
+    // would read past the fixed-size bone[]/weight[] arrays below.
+    int nNumBones = srcVertex.boneweight.numbones;
+    if (nNumBones > MAXSTUDIOBONEWEIGHTS)
+        nNumBones = MAXSTUDIOBONEWEIGHTS;
+
     int n;
-    for (n = 0; n < srcVertex.boneweight.numbones; n++) {
+    for (n = 0; n < nNumBones; n++) {
         // src bone
         int q = srcVertex.boneweight.bone[n];
+
+        // A local bone index outside the source's bone table would index
+        // boneLocalToGlobal[] (and later pDestBoneToWorld[]/g_bonetable[]) out of
+        // range - a large page-aligned read that crashes intermittently. Skip it.
+        if (q < 0 || q >= pSource->numbones)
+            continue;
 
         // mapping to global bone
         int k = pSource->boneLocalToGlobal[q];
@@ -5995,6 +6017,10 @@ static void InitRemappedVertex(s_source_t *pSource, matrix3x4_t *pDestBoneToWorl
             break;
             // printf("%s:%s (%d) missing global\n", psource->filename, psource->localBone[q].name, q );
         }
+
+        // Defend the global index too before it indexes pDestBoneToWorld[]/g_bonetable[].
+        if (k < 0 || k >= g_StudioMdlContext.numbones)
+            continue;
 
         // If the global bone is already in the list, then this vertex
         // contains influences from multiple local bones which have been collapsed 
@@ -6063,6 +6089,12 @@ void RemapVerticesToGlobalBones() {
         BuildRawTransforms(pSource, pSourceAnim->animationname, 0, srcBoneToWorld);
         TranslateAnimations(pSource, srcBoneToWorld, destBoneToWorld);
 
+        // Reset before sizing: m_GlobalVertices may already be populated (e.g. a
+        // $rendermesh filter rebuilds it earlier). Appending without clearing would
+        // leave a second, uninitialized half (garbage boneweight.numbones) that later
+        // passes such as ApplyMoveWeightQueue read, causing an intermittent crash.
+        // The loop below fully initializes exactly numvertices entries.
+        pSource->m_GlobalVertices.RemoveAll();
         pSource->m_GlobalVertices.AddMultipleToTail(pSource->numvertices);
 
         for (int j = 0; j < pSource->numvertices; j++) {
@@ -6086,6 +6118,12 @@ void RemapVerticesToGlobalBones() {
                 s_vertanim_t *pVertAnims = pAnim->vanim[nFrameIndex];
                 for (int nVertexIndex = 0; nVertexIndex < nVertexCount; ++nVertexIndex) {
                     s_vertanim_t &vertAnim = pVertAnims[nVertexIndex];
+                    // vertAnim.vertex indexes pSource->vertex[] and m_GlobalVertices[],
+                    // both sized pSource->numvertices. A vanim vertex id outside that
+                    // range (e.g. a vert removed by $lod decimation) would read off the
+                    // end of those arrays - an intermittent EXCEPTION_ACCESS_VIOLATION.
+                    if (vertAnim.vertex < 0 || vertAnim.vertex >= pSource->numvertices)
+                        continue;
                     const s_vertexinfo_t &vertex = pSource->vertex[vertAnim.vertex];
                     memcpy(&vTmpSrc, &vertex, sizeof(s_vertexinfo_t));
 
@@ -8487,6 +8525,12 @@ void ApplyMoveWeightQueue() {
             s_source_t *pSource = g_source[i];
             for (int j = 0; j < pSource->m_GlobalVertices.Count(); j++) {
                 s_boneweight_t &bw = pSource->m_GlobalVertices[j].boneweight;
+
+                // Defensive: numbones is the bound for the bone[]/weight[] loops below
+                // (fixed-size arrays of MAXSTUDIOBONEWEIGHTS). A corrupt/uninitialized
+                // value would walk far off the end. Skip such an entry rather than crash.
+                if (bw.numbones < 0 || bw.numbones > MAXSTUDIOBONEWEIGHTS)
+                    continue;
 
                 // only touch vertices influenced by the moved bone
                 int slot = -1;
