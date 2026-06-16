@@ -6192,6 +6192,208 @@ static void TagWorldAlignedBones() {
 }
 
 //-----------------------------------------------------------------------------
+// Shared tail for $aligneyes / $alignmouth: fill the reserved attachment slot at
+// 'attachIndex' with an absolute transform built from a world-space origin and a
+// forward direction (reqForward if non-zero, else the averaged normalSum). Stored
+// IS_ABSOLUTE so LinkAttachments converts it into the bone's local space.
+//-----------------------------------------------------------------------------
+static void FillAlignAttachment(const char *cmd, int attachIndex, const char *attName,
+                                const char *boneName, const Vector &origin,
+                                const Vector &reqForward, const Vector &normalSum) {
+    // forward: literal world-space direction if given, else averaged normals
+    Vector forward;
+    if (reqForward.LengthSqr() > 0.0f) {
+        forward = reqForward;
+        if (VectorNormalize(forward) == 0.0f)
+            MdlError("%s \"%s\": 'forward' direction is zero-length\n", cmd, attName);
+    } else {
+        forward = normalSum;
+        if (VectorNormalize(forward) == 0.0f)
+            MdlError("%s \"%s\": averaged normals are zero-length; specify a 'forward' direction\n",
+                     cmd, attName);
+    }
+
+    // stable up reference for deterministic roll (+Z, or +Y if forward is vertical)
+    Vector up(0, 0, 1);
+    if (fabs(DotProduct(forward, up)) > 0.99f)
+        up.Init(0, 1, 0);
+    QAngle ang;
+    VectorAngles(forward, up, ang);
+
+    // fill the slot reserved at parse time (preserves declaration order)
+    s_attachment_t &att = g_attachment[attachIndex];
+    strcpyn(att.name, attName);
+    strcpyn(att.bonename, boneName);
+    att.type |= IS_ABSOLUTE;
+    AngleMatrix(ang, att.local);
+    att.local[0][3] = origin.x;
+    att.local[1][3] = origin.y;
+    att.local[2][3] = origin.z;
+}
+
+//-----------------------------------------------------------------------------
+// $aligneyes: fill each reserved attachment slot from its eyeballs (centroid origin,
+// 'forward' or averaged-normal direction). Runs before LinkAttachments so the
+// IS_ABSOLUTE result is converted into bone-local space by the normal link pass.
+//-----------------------------------------------------------------------------
+void GenerateAlignEyesAttachments() {
+    for (int a = 0; a < g_numaligneyes; a++) {
+        const s_aligneyes_t &req = g_aligneyes[a];
+
+        Vector posSum(0, 0, 0);
+        Vector normalSum(0, 0, 0);
+        int vertCount = 0;
+        int sharedBone = -1;
+        const char *sharedBoneName = NULL;
+
+        for (int ei = 0; ei < req.numeyeballs; ei++) {
+            const char *eyeballName = req.eyeballs[ei];
+
+            // find the named eyeball across all base models
+            s_eyeball_t *peyeball = NULL;
+            s_source_t *psource = NULL;
+            for (int m = 0; m < g_nummodelsbeforeLOD && !peyeball; m++) {
+                for (int j = 0; j < g_model[m]->numeyeballs; j++) {
+                    if (!Q_stricmp(g_model[m]->eyeball[j].name, eyeballName)) {
+                        peyeball = &g_model[m]->eyeball[j];
+                        psource = g_model[m]->source;
+                        break;
+                    }
+                }
+            }
+            if (!peyeball)
+                MdlError("$aligneyes \"%s\": unknown eyeball \"%s\" (line %d)\n",
+                         req.name, eyeballName, req.linecount);
+
+            int material = psource->meshindex[peyeball->mesh];
+            // eyeball->bone is still local here; resolve to a global bone
+            int globalBone = psource->boneLocalToGlobal[peyeball->bone];
+            if (sharedBone == -1) {
+                sharedBone = globalBone;
+                sharedBoneName = g_bonetable[globalBone].name;
+            } else if (globalBone != sharedBone) {
+                MdlError("$aligneyes \"%s\": eyeball \"%s\" is bound to bone \"%s\" but "
+                         "another eyeball uses \"%s\" - all eyeballs must share one bone\n",
+                         req.name, eyeballName, g_bonetable[globalBone].name, sharedBoneName);
+            }
+
+            // accumulate model-space positions (centroid) and normals (auto direction)
+            for (int v = 0; v < psource->numvertices; v++) {
+                if (psource->vertex[v].material != material)
+                    continue;
+                posSum += psource->vertex[v].position;
+                normalSum += psource->vertex[v].normal;
+                vertCount++;
+            }
+        }
+
+        if (vertCount == 0)
+            MdlError("$aligneyes \"%s\": no vertices found for the listed eyeballs\n", req.name);
+
+        // origin = centroid + offset (world-aligned)
+        Vector origin = posSum / (float)vertCount + req.offset;
+
+        FillAlignAttachment("$aligneyes", req.attachIndex, req.name, sharedBoneName,
+                            origin, req.forward, normalSum);
+    }
+}
+
+//-----------------------------------------------------------------------------
+// $alignmouth: centroid the vertices deformed by the listed flexes. The driven
+// flexes are found by walking the flex rules (a FETCH1 op references a flex
+// controller); each matched flexkey's vanim verts index the model's LOD vertex pool.
+//-----------------------------------------------------------------------------
+void GenerateAlignMouthAttachments() {
+    if (g_numalignmouth == 0)
+        return;
+
+    for (int a = 0; a < g_numalignmouth; a++) {
+        const s_alignmouth_t &req = g_alignmouth[a];
+
+        // 1) resolve target flex controllers (by name and by group/type)
+        bool ctrlUsed[MAXSTUDIOFLEXCTRL] = {false};
+        int numCtrl = 0;
+        for (int c = 0; c < g_numflexcontrollers; c++) {
+            bool match = false;
+            for (int g = 0; g < req.numgroups && !match; g++)
+                if (!Q_stricmp(g_flexcontroller[c].type, req.groups[g]))
+                    match = true;
+            for (int n = 0; n < req.numcontrollers && !match; n++)
+                if (!Q_stricmp(g_flexcontroller[c].name, req.controllers[n]))
+                    match = true;
+            if (match) {
+                ctrlUsed[c] = true;
+                numCtrl++;
+            }
+        }
+        if (numCtrl == 0)
+            MdlError("$alignmouth \"%s\": no matching flexcontroller/flexgroup (line %d)\n",
+                     req.name, req.linecount);
+
+        // 2) any flexrule that FETCH1's a matched controller drives its flexdesc
+        bool descDriven[MAXSTUDIOFLEXDESC] = {false};
+        for (int r = 0; r < g_numflexrules; r++) {
+            const s_flexrule_t &rule = g_flexrule[r];
+            for (int o = 0; o < rule.numops; o++) {
+                if (rule.op[o].op == STUDIO_FETCH1 &&
+                    rule.op[o].d.index >= 0 && rule.op[o].d.index < MAXSTUDIOFLEXCTRL &&
+                    ctrlUsed[rule.op[o].d.index]) {
+                    if (rule.flex >= 0 && rule.flex < MAXSTUDIOFLEXDESC)
+                        descDriven[rule.flex] = true;
+                    break;
+                }
+            }
+        }
+
+        // 3) average the base positions/normals of verts touched by flexkeys with a
+        //    driven desc, and accumulate bone weights to pick the parent bone.
+        //    After RemapVertexAnimations, vanim[].vertex indexes the model's LOD pool.
+        Vector posSum(0, 0, 0);
+        Vector normalSum(0, 0, 0);
+        int vertCount = 0;
+        static float weightAccum[MAXSTUDIOBONES];
+        memset(weightAccum, 0, sizeof(weightAccum));
+        for (int k = 0; k < g_numflexkeys; k++) {
+            const s_flexkey_t &fk = g_flexkey[k];
+            if (fk.flexdesc < 0 || fk.flexdesc >= MAXSTUDIOFLEXDESC || !descDriven[fk.flexdesc])
+                continue;
+            s_loddata_t *pLod = g_model[fk.imodel]->m_pLodData;
+            if (!pLod)
+                continue;
+            for (int v = 0; v < fk.numvanims; v++) {
+                int vi = fk.vanim[v].vertex;
+                if (vi < 0 || vi >= pLod->numvertices)
+                    continue;
+                posSum += pLod->vertex[vi].position;
+                normalSum += pLod->vertex[vi].normal;
+                vertCount++;
+                const s_boneweight_t &bw = pLod->vertex[vi].boneweight;
+                for (int b = 0; b < bw.numbones; b++)
+                    if (bw.bone[b] >= 0 && bw.bone[b] < MAXSTUDIOBONES)
+                        weightAccum[bw.bone[b]] += bw.weight[b];
+            }
+        }
+
+        if (vertCount == 0)
+            MdlError("$alignmouth \"%s\": the matched flexes deform no vertices\n", req.name);
+
+        // parent bone = the one the deformed verts are weighted to most
+        int bestBone = -1;
+        float bestWeight = 0.0f;
+        for (int b = 0; b < g_StudioMdlContext.numbones && b < MAXSTUDIOBONES; b++)
+            if (weightAccum[b] > bestWeight) { bestWeight = weightAccum[b]; bestBone = b; }
+        if (bestBone < 0)
+            MdlError("$alignmouth \"%s\": could not determine a bone for the deformed verts\n", req.name);
+
+        // origin = centroid + offset (world-aligned)
+        Vector origin = posSum / (float)vertCount + req.offset;
+
+        FillAlignAttachment("$alignmouth", req.attachIndex, req.name,
+                            g_bonetable[bestBone].name, origin, req.forward, normalSum);
+    }
+}
+
+//-----------------------------------------------------------------------------
 // Links attachments
 //-----------------------------------------------------------------------------
 
@@ -8691,6 +8893,11 @@ void SimplifyModel() {
     TagScreenAlignedBones();
 
     TagWorldAlignedBones();
+
+    // generate $aligneyes / $alignmouth attachments before linking so they flow
+    // through the normal absolute-attachment world->bone-local conversion
+    GenerateAlignEyesAttachments();
+    GenerateAlignMouthAttachments();
 
     // link attachments
     LinkAttachments();

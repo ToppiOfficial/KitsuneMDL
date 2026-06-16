@@ -55,7 +55,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 - Recreated features from StudioMDL++ and NekoMDL:
   - `-cullanims` flag to strip unreferenced `$animation` blocks
   - Bone weight cull threshold reduced from 5% to 0.01%
-  - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, and VTA flex deltas
+  - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, VTA flex deltas, and `$eyeposition`
   - `$renamebone` now propagates to the collision model
   - Fixed crash with blank bodygroup combined with `$staticprop`
 

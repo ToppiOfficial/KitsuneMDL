@@ -388,6 +388,48 @@ struct s_attachment_t {
 EXTERN std::array<s_attachment_t, MAXSTUDIOSRCBONES> g_attachment;
 EXTERN int g_numattachments;
 
+// $aligneyes: deferred request that auto-generates an attachment from named eyeballs.
+// Origin = centroid of their material vertices; forward = literal world-space
+// 'forward', or the averaged eyeball normals when 'forward' is 0,0,0. Computed in
+// world space and stored absolute. Resolved by GenerateAlignEyesAttachments
+// (simplify.cpp).
+#define MAX_ALIGNEYES 8
+#define MAX_ALIGNEYES_EYEBALLS 8
+struct s_aligneyes_t {
+    char name[MAXSTUDIONAME];                                 // attachment name
+    char eyeballs[MAX_ALIGNEYES_EYEBALLS][MAXSTUDIONAME];     // eyeball names to align
+    int  numeyeballs;
+    Vector offset;     // world-aligned, added to the eye centroid (units); default 0,0,0
+    Vector forward;    // literal world-space forward; 0,0,0 = use averaged normals
+    int attachIndex;   // slot reserved in g_attachment[] at parse time (preserves order)
+    int linecount;
+};
+EXTERN std::array<s_aligneyes_t, MAX_ALIGNEYES> g_aligneyes;
+EXTERN int g_numaligneyes;
+void GenerateAlignEyesAttachments();
+
+// $alignmouth: like $aligneyes, but the centroid comes from the vertices deformed by
+// a set of flexes. Each target is either a flexcontroller (by name) or a flexgroup
+// (matching flexcontroller 'type'); the driven flexes are resolved by walking the
+// flex rules (g_flexrule[] FETCH1 ops), and the affected vertices' base positions are
+// averaged. Resolved by GenerateAlignMouthAttachments (simplify.cpp).
+#define MAX_ALIGNMOUTH 8
+#define MAX_ALIGNMOUTH_TARGETS 16
+struct s_alignmouth_t {
+    char name[MAXSTUDIONAME];                                  // attachment name
+    char groups[MAX_ALIGNMOUTH_TARGETS][MAXSTUDIONAME];        // flexgroup (type) names
+    int  numgroups;
+    char controllers[MAX_ALIGNMOUTH_TARGETS][MAXSTUDIONAME];   // flexcontroller names
+    int  numcontrollers;
+    Vector offset;     // world-aligned, added to the centroid (units); default 0,0,0
+    Vector forward;    // literal world-space forward; 0,0,0 = use averaged normals
+    int attachIndex;   // slot reserved in g_attachment[] at parse time (preserves order)
+    int linecount;
+};
+EXTERN std::array<s_alignmouth_t, MAX_ALIGNMOUTH> g_alignmouth;
+EXTERN int g_numalignmouth;
+void GenerateAlignMouthAttachments();
+
 struct s_bonemerge_t {
     char bonename[MAXSTUDIONAME];
 };

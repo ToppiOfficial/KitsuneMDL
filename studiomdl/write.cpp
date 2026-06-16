@@ -3033,7 +3033,7 @@ void WriteModelFiles() {
         modelouthandle = SafeOpenWrite(filename);
     }
 
-    phdr->eyeposition = eyeposition;
+    phdr->eyeposition = eyeposition * g_defaultscale;
     phdr->illumposition = illumposition;
 
     if (!g_wrotebbox && g_sequence.Count() > 0) {

@@ -4023,6 +4023,150 @@ void Cmd_MoveBone() {
     g_numbonetransformedits++;
 }
 
+//-----------------------------------------------------------------------------
+// $aligneyes <name> { eyeball <name> [...] [offset <x y z>] [forward <x y z>] }
+//   Auto-generates an attachment centered on the listed eyeballs. 'forward' is a
+//   literal world-space direction (1 0 0 = world +X); if omitted/0 0 0 the averaged
+//   eyeball mesh normals are used. All eyeballs must share one bone. Filled in later
+//   by GenerateAlignEyesAttachments (simplify.cpp).
+//-----------------------------------------------------------------------------
+void Cmd_AlignEyes() {
+    if (g_StudioMdlContext.createMakefile)
+        return;
+
+    if (g_numaligneyes >= MAX_ALIGNEYES)
+        TokenError("$aligneyes: exceeded limit of %d\n", MAX_ALIGNEYES);
+
+    s_aligneyes_t &e = g_aligneyes[g_numaligneyes];
+    memset(&e, 0, sizeof(e));
+    e.forward.Init(0, 0, 0);     // 0,0,0 = auto (use averaged eyeball normals)
+    e.offset.Init(0, 0, 0);
+
+    // attachment name
+    GetToken(false);
+    strcpyn(e.name, token);
+
+    GetToken(true);
+    if (stricmp(token, "{")) {
+        MdlError("$aligneyes: expected '{', got '%s'\n", token);
+        return;
+    }
+
+    while (GetToken(true)) {
+        if (!stricmp(token, "}"))
+            break;
+
+        if (!stricmp(token, "eyeball")) {
+            if (e.numeyeballs >= MAX_ALIGNEYES_EYEBALLS)
+                TokenError("$aligneyes: too many eyeballs (max %d)\n", MAX_ALIGNEYES_EYEBALLS);
+            GetToken(false);
+            strcpyn(e.eyeballs[e.numeyeballs], token);
+            e.numeyeballs++;
+        } else if (!stricmp(token, "offset")) {
+            GetToken(false); e.offset.x = verify_atof(token);
+            GetToken(false); e.offset.y = verify_atof(token);
+            GetToken(false); e.offset.z = verify_atof(token);
+        } else if (!stricmp(token, "forward")) {
+            GetToken(false); e.forward.x = verify_atof(token);
+            GetToken(false); e.forward.y = verify_atof(token);
+            GetToken(false); e.forward.z = verify_atof(token);
+        } else {
+            MdlError("$aligneyes: unknown option '%s'\n", token);
+        }
+    }
+
+    if (e.numeyeballs == 0)
+        MdlError("$aligneyes \"%s\": no eyeballs specified\n", e.name);
+
+    // Reserve the attachment slot now to keep declaration order vs. $attachment;
+    // GenerateAlignEyesAttachments fills it once bones/sources exist.
+    if (g_numattachments >= (int)g_attachment.size())
+        TokenError("$aligneyes: too many attachments\n");
+    e.attachIndex = g_numattachments;
+    s_attachment_t &att = g_attachment[g_numattachments];
+    memset(&att, 0, sizeof(att));
+    strcpyn(att.name, e.name);
+    g_numattachments++;
+
+    e.linecount = g_StudioMdlContext.iLinecount;
+    g_numaligneyes++;
+}
+
+//-----------------------------------------------------------------------------
+// $alignmouth <name> { flexgroup <name> | flexcontroller <name> [...] [offset ...] [forward ...] }
+//   Like $aligneyes, but centers the attachment on the vertices deformed by the
+//   listed flexes. 'flexgroup' matches a flexcontroller 'type' (group); 'flexcontroller'
+//   names a single controller. Filled in by GenerateAlignMouthAttachments
+//   (simplify.cpp).
+//-----------------------------------------------------------------------------
+void Cmd_AlignMouth() {
+    if (g_StudioMdlContext.createMakefile)
+        return;
+
+    if (g_numalignmouth >= MAX_ALIGNMOUTH)
+        TokenError("$alignmouth: exceeded limit of %d\n", MAX_ALIGNMOUTH);
+
+    s_alignmouth_t &e = g_alignmouth[g_numalignmouth];
+    memset(&e, 0, sizeof(e));
+    e.forward.Init(0, 0, 0);     // 0,0,0 = auto (use averaged flex-vertex normals)
+    e.offset.Init(0, 0, 0);
+
+    // attachment name
+    GetToken(false);
+    strcpyn(e.name, token);
+
+    GetToken(true);
+    if (stricmp(token, "{")) {
+        MdlError("$alignmouth: expected '{', got '%s'\n", token);
+        return;
+    }
+
+    while (GetToken(true)) {
+        if (!stricmp(token, "}"))
+            break;
+
+        if (!stricmp(token, "flexgroup")) {
+            if (e.numgroups >= MAX_ALIGNMOUTH_TARGETS)
+                TokenError("$alignmouth: too many flexgroups (max %d)\n", MAX_ALIGNMOUTH_TARGETS);
+            GetToken(false);
+            strcpyn(e.groups[e.numgroups], token);
+            e.numgroups++;
+        } else if (!stricmp(token, "flexcontroller")) {
+            if (e.numcontrollers >= MAX_ALIGNMOUTH_TARGETS)
+                TokenError("$alignmouth: too many flexcontrollers (max %d)\n", MAX_ALIGNMOUTH_TARGETS);
+            GetToken(false);
+            strcpyn(e.controllers[e.numcontrollers], token);
+            e.numcontrollers++;
+        } else if (!stricmp(token, "offset")) {
+            GetToken(false); e.offset.x = verify_atof(token);
+            GetToken(false); e.offset.y = verify_atof(token);
+            GetToken(false); e.offset.z = verify_atof(token);
+        } else if (!stricmp(token, "forward")) {
+            GetToken(false); e.forward.x = verify_atof(token);
+            GetToken(false); e.forward.y = verify_atof(token);
+            GetToken(false); e.forward.z = verify_atof(token);
+        } else {
+            MdlError("$alignmouth: unknown option '%s'\n", token);
+        }
+    }
+
+    if (e.numgroups == 0 && e.numcontrollers == 0)
+        MdlError("$alignmouth \"%s\": no flexgroup/flexcontroller specified\n", e.name);
+
+    // Reserve the attachment slot now to keep declaration order vs. $attachment;
+    // GenerateAlignMouthAttachments fills it once flexes are resolved.
+    if (g_numattachments >= (int)g_attachment.size())
+        TokenError("$alignmouth: too many attachments\n");
+    e.attachIndex = g_numattachments;
+    s_attachment_t &att = g_attachment[g_numattachments];
+    memset(&att, 0, sizeof(att));
+    strcpyn(att.name, e.name);
+    g_numattachments++;
+
+    e.linecount = g_StudioMdlContext.iLinecount;
+    g_numalignmouth++;
+}
+
 bool ParseJiggleAngleConstraint(s_jigglebone_t *jiggleInfo) {
     jiggleInfo->data.flags |= JIGGLE_HAS_ANGLE_CONSTRAINT;
 
@@ -8717,6 +8861,8 @@ MDLCommand_t g_Commands[] =
                 {"$contents",                        Cmd_Contents,},
                 {"$jointcontents",                   Cmd_JointContents,},
                 {"$attachment",                      Cmd_Attachment,},
+                {"$aligneyes",                       Cmd_AlignEyes,},
+                {"$alignmouth",                      Cmd_AlignMouth,},
                 {"$redefineattachment",              Cmd_RedefineAttachment,},
                 {"$bonemerge",                       Cmd_BoneMerge,},
                 {"$bonealwayssetup",                 Cmd_BoneAlwaysSetup,},
