@@ -23,7 +23,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 ## Known Issues
 
 > [!WARNING]
-> **Mesh splitting with flex data is partially fixed.** Splitting meshes that contain flex data no longer reliably produces corrupted output, but flex elements can still duplicate during compile. On models with many shape keys or flex controllers, this duplication can hit the flex vertex limit much faster than expected.
+> **Mesh splitting with flex data is partially fixed.** Splitting meshes that contain flex data no longer reliably produces corrupted output, but flex elements can still duplicate during compile. On models with many shape keys or flex controllers, this duplication can hit the limit much faster than expected.
 
 > [!WARNING]
 > **Collision compile accuracy may vary.** The standalone `$collisionmodel` and `$collisionjoints` pipeline (which no longer requires vphysics.dll) is built from a combination of open-source references and reverse engineering. References used: [VPhysics-Jolt](https://github.com/misyltoad/VPhysics-Jolt), [Gmod-vphysics](https://github.com/DrChat/Gmod-vphysics), and [Valve Developer Wiki - VPhysics](https://developer.valvesoftware.com/wiki/VPhysics). Its output may not be fully consistent with what official Valve studiomdl produces. If you encounter incorrect physics shapes, unexpected behavior, or compilation differences, please report them as issues.
