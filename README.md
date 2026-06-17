@@ -6,19 +6,33 @@ A modified standalone fork of Valve's StudioMDL compiler, focused on advanced ch
 
 Primarily tested with `DMX model 18`. Older versions may still work.
 
+## Tested Source Engine Branch
+ 
+| Game | Test Result |
+|---|---|
+| Garry's Mod | ✅ Fully supported |
+| Left 4 Dead 2 | ✅ Fully supported |
+| Half-Life 2 | 🟡 Partially tested (20th Anniversary version) |
+| Counter-Strike: Source | ❌ Untested |
+| Team Fortress 2 | ❌ Untested |
+| Counter-Strike: Global Offensive (Legacy) | 🟡 Partially tested |
+| Alien Swarm | ❌ Untested |
+| Source Filmmaker | 🟡 Partially tested |
+| Portal 1 & 2 | ❌ Untested |
+
 ## Known Issues
 
-> [!CAUTION]
-> **Mesh splitting is unreliable.** Splitting meshes that contain flex data may produce corrupted or completely broken results. Use with caution, especially on models with shape keys or flex controllers. Results can range from minor vertex errors to fully unusable output.
+> [!WARNING]
+> **Mesh splitting with flex data is partially fixed.** Splitting meshes that contain flex data no longer reliably produces corrupted output, but flex elements can still duplicate during compile. On models with many shape keys or flex controllers, this duplication can hit the flex vertex limit much faster than expected.
 
 > [!WARNING]
 > **Collision compile accuracy may vary.** The standalone `$collisionmodel` and `$collisionjoints` pipeline (which no longer requires vphysics.dll) is built from a combination of open-source references and reverse engineering. References used: [VPhysics-Jolt](https://github.com/misyltoad/VPhysics-Jolt), [Gmod-vphysics](https://github.com/DrChat/Gmod-vphysics), and [Valve Developer Wiki - VPhysics](https://developer.valvesoftware.com/wiki/VPhysics). Its output may not be fully consistent with what official Valve studiomdl produces. If you encounter incorrect physics shapes, unexpected behavior, or compilation differences, please report them as issues.
 
-> [!NOTE]
-> **"Skipped N flex vertex deltas with no matching model vertex" is normal on complex flex/morph characters.** When a model uses `$lod` decimation, verts removed at lower LODs no longer have anywhere for their flex/morph deltas to go, so those deltas are skipped during compile. This is expected and harmless - the affected verts no longer exist. It generally does not occur on simpler models such as props. Only worth investigating if a specific morph visibly loses movement in-game.
-
 
 ## Features
+
+> [!NOTE]
+> **New QC commands that are not listed in features are not finalized.** Syntax, behavior, and naming for said commands are subject to change or removal in future versions.
 
 - 64-bit, no external dependencies
 - Increased limits:
@@ -59,11 +73,6 @@ Primarily tested with `DMX model 18`. Older versions may still work.
   - `$renamebone` now propagates to the collision model
   - Fixed crash with blank bodygroup combined with `$staticprop`
 
-## TODO
-
-- Fix mesh splitting with flex data - currently produces corrupted or broken output on models with shape keys or flex controllers
-- Fully test `$collisionmodel` and `$collisionjoints` pipeline against official Valve studiomdl output to validate accuracy
-- Linux native support
 
 ## Credits
 
