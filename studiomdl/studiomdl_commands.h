@@ -16,6 +16,7 @@ int ParseAnimation(s_animation_t *panim, bool isAppend);
 int ParseEmpty(void);
 int ParseSequence(s_sequence_t *pseq, bool isAppend);
 void CullUnreferencedAnimations();
+void CullUnreferencedFlexes();
 
 struct MDLCommand_t {
     char *m_pName;

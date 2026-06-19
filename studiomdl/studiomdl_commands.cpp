@@ -6478,6 +6478,95 @@ void CullUnreferencedAnimations()
 }
 
 //-----------------------------------------------------------------------------
+// Purpose: remove flex morphs (flexkeys) whose target flexdesc is not driven by
+//          any flexrule, read by any flexrule, or referenced by an eyeball or
+//          mouth. Such morphs carry vertex-animation data that is never reachable
+//          at runtime and only inflate the .vvd/.mdl. Must run before
+//          SimplifyModel() so the dead vanim data is never built.
+//-----------------------------------------------------------------------------
+void CullUnreferencedFlexes()
+{
+    if ( !g_StudioMdlContext.cullMorphs || g_numflexkeys == 0 )
+        return;
+
+    bool usedDesc[MAXSTUDIOFLEXDESC] = {false};
+
+    auto MarkDesc = [&]( int desc ) {
+        if ( desc >= 0 && desc < MAXSTUDIOFLEXDESC )
+            usedDesc[desc] = true;
+    };
+
+    // flexrules: their output flexdesc and any flexdesc they FETCH2 (read) are live
+    for ( int r = 0; r < g_numflexrules; r++ )
+    {
+        const s_flexrule_t &rule = g_flexrule[r];
+        MarkDesc( rule.flex );
+        for ( int o = 0; o < rule.numops; o++ )
+            if ( rule.op[o].op == STUDIO_FETCH2 )
+                MarkDesc( rule.op[o].d.index );
+    }
+
+    // eyeballs reference flexdescs directly (lid + raiser/neutral/lowerer)
+    for ( int i = 0; i < g_nummodels; i++ )
+    {
+        s_model_t *pmodel = g_model[i];
+        if ( !pmodel )
+            continue;
+        for ( int j = 0; j < pmodel->numeyeballs; j++ )
+        {
+            const s_eyeball_t &eye = pmodel->eyeball[j];
+            MarkDesc( eye.upperlidflexdesc );
+            MarkDesc( eye.lowerlidflexdesc );
+            for ( int k = 0; k < 3; k++ )
+            {
+                MarkDesc( eye.upperflexdesc[k] );
+                MarkDesc( eye.lowerflexdesc[k] );
+            }
+        }
+    }
+
+    // mouths reference a flexdesc for movement
+    for ( int i = 0; i < g_nummouths; i++ )
+        MarkDesc( g_mouth[i].flexdesc );
+
+    int newCount = 0;
+    int numCulled = 0;
+    for ( int i = 0; i < g_numflexkeys; i++ )
+    {
+        s_flexkey_t &fk = g_flexkey[i];
+
+        bool bKeep = ( &fk == g_defaultflexkey )
+                     || ( fk.flexdesc >= 0 && fk.flexdesc < MAXSTUDIOFLEXDESC && usedDesc[fk.flexdesc] )
+                     || ( fk.flexpair >  0 && fk.flexpair < MAXSTUDIOFLEXDESC && usedDesc[fk.flexpair] );
+
+        if ( !bKeep )
+        {
+            if ( !g_StudioMdlContext.quiet )
+            {
+                const char *facs = ( fk.flexdesc >= 0 && fk.flexdesc < g_numflexdesc )
+                                       ? g_flexdesc[fk.flexdesc].FACS : "?";
+                printf( "Culling unused flex morph \"%s\"\n", facs );
+            }
+            numCulled++;
+            continue;
+        }
+
+        if ( newCount != i )
+        {
+            // keep g_defaultflexkey pointing at the morph after compaction
+            if ( g_defaultflexkey == &g_flexkey[i] )
+                g_defaultflexkey = &g_flexkey[newCount];
+            g_flexkey[newCount] = g_flexkey[i];
+        }
+        newCount++;
+    }
+    g_numflexkeys = newCount;
+
+    if ( !g_StudioMdlContext.quiet && numCulled > 0 )
+        printf( "Culled %d unused flex morph(s).\n", numCulled );
+}
+
+//-----------------------------------------------------------------------------
 // Purpose: allocate an entry for $animation
 //-----------------------------------------------------------------------------
 void Cmd_Animation() {

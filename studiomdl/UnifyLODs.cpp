@@ -1119,14 +1119,18 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
     // Shallow copy - shares bone table, animation data, etc.
     memcpy(pDst, pSrc, sizeof(s_source_t));
 
-    // Zero m_GlobalVertices before copying. After memcpy the CUtlVector internals
-    // are aliased to pSrc's backing allocation. operator= only reallocates when
-    // capacity is insufficient, so it would leave them sharing the same buffer.
-    // When RemapVerticesToGlobalBones later grows pSrc->m_GlobalVertices it may
-    // free the old allocation, leaving pDst with a dangling pointer. Zeroing
-    // forces operator= to always allocate a fresh independent buffer.
+    // Zero before assign so operator= allocates a fresh buffer instead of aliasing
+    // pSrc's (which RemapVerticesToGlobalBones may later realloc, leaving us dangling).
     memset(&pDst->m_GlobalVertices, 0, sizeof(pDst->m_GlobalVertices));
     pDst->m_GlobalVertices = pSrc->m_GlobalVertices;
+
+    // Deep copy vertex[] so the decimated source owns its geometry; otherwise an
+    // in-place per-source edit (e.g. ApplyStaticPropPose) would hit pSrc's array once
+    // per aliasing source, compounding the transform.
+    pDst->vertex = pSrc->numvertices
+        ? (s_vertexinfo_t *)malloc(pSrc->numvertices * sizeof(s_vertexinfo_t)) : nullptr;
+    if (pDst->vertex)
+        memcpy(pDst->vertex, pSrc->vertex, pSrc->numvertices * sizeof(s_vertexinfo_t));
 
     // Per-mesh decimation: build new faces for each material mesh
     struct MeshFaces { CUtlVector<s_face_t> faces; };
@@ -1135,10 +1139,8 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
     int nTotalNewFaces = 0;
     float resultError = 0.0f;
 
-    // $rendermesh sources have m_GlobalVertices pre-populated by ApplyDmeMeshFilter, and
-    // mesh[].vertexoffset/numvertices are relative to that array. $model sources (e.g. face
-    // with flexes) have m_GlobalVertices empty at LoadLODSources time - RemapVerticesToGlobalBones
-    // fills it later. For those, vertex[] is always populated and mesh[] offsets are relative to it.
+    // $rendermesh sources have m_GlobalVertices pre-populated (mesh offsets relative to it);
+    // $model sources have it empty here, so fall back to vertex[].
     const s_vertexinfo_t *pVertBase = pSrc->m_GlobalVertices.Count() > 0
         ? pSrc->m_GlobalVertices.Base()
         : pSrc->vertex;

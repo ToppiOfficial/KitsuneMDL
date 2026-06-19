@@ -68,6 +68,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 - `$model` can now be used inside `$bodygroup` blocks, enabling named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.md`
 - Recreated features from StudioMDL++ and NekoMDL:
   - `-cullanims` flag to strip unreferenced `$animation` blocks
+  - `-cullmorphs` flag to strip flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth (dead vertex-animation data)
   - Bone weight cull threshold reduced from 5% to 0.01%
   - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, VTA flex deltas, and `$eyeposition`
   - `$renamebone` now propagates to the collision model

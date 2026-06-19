@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.3.1";
+static const char *KITSUNE_MDL_VERSION = "0.3.2";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -694,6 +694,7 @@ void UsageAndExit() {
              "[-vtxformat <int>] - VTX format: 0 = TF2/L4D2 (default), 1 = Alien Swarm/CS:GO\n"
              "[-nodx80] - skip dx80.vtx and sw.vtx output\n"
              "[-cullanims] - remove unreferenced $animations to reduce file size\n"
+             "[-cullmorphs] - remove flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth to reduce file size\n"
     );
 }
 
@@ -900,6 +901,8 @@ int CStudioMDLApp::Main() {
         SetSkinValues();
 
         CullUnreferencedAnimations();
+
+        CullUnreferencedFlexes();
 
         SimplifyModel();
 
@@ -1206,6 +1209,11 @@ bool CStudioMDLApp::ParseArguments() {
 
         if (!Q_stricmp(pArgv, "-cullanims")) {
             g_StudioMdlContext.cullAnims = true;
+            continue;
+        }
+
+        if (!Q_stricmp(pArgv, "-cullmorphs")) {
+            g_StudioMdlContext.cullMorphs = true;
             continue;
         }
 

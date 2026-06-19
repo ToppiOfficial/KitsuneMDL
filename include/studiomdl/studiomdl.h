@@ -1971,6 +1971,7 @@ struct StudioMdlContext {
     unsigned bMakeVsi: 1;
     unsigned bNoWarnings: 1;
     unsigned cullAnims: 1;
+    unsigned cullMorphs: 1;
     int g_maxWarnings = -1;
     char g_path[1024];
 
