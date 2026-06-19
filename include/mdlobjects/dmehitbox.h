@@ -30,8 +30,8 @@ public:
 	CDmaVar< int > m_nGroupId;
 	CDmaString m_sBoneName;
 	CDmaColor m_cRenderColor;	// used for visualization
-	CDmaVar< float > m_flRadius;			// "radius": -1 = OBB box, >= 0 = capsule radius
-	CDmaVar< QAngle > m_qOrientation;	// "orientation": OBB/capsule rotation offset
+	CDmaVar< float > m_flRadius;		// "radius": -1 = OBB box, >= 0 = capsule radius
+	CDmaVar< Vector > m_vOrientation;	// "orientation": OBB/capsule rotation offset (pitch, yaw, roll)
 
 };
 

@@ -25,6 +25,9 @@
 #include "mdlobjects/dmeeyelid.h"
 #include "mdlobjects/dmejigglebone.h"
 #include "mdlobjects/dmemouth.h"
+#include "mdlobjects/dmehitbox.h"
+#include "mdlobjects/dmehitboxset.h"
+#include "mdlobjects/dmehitboxsetlist.h"
 
 
 // Local includes
@@ -4077,19 +4080,6 @@ static void LoadHitboxSetList( const CDmeHitboxSetList *pDmeHitboxSetList )
 		{
 			CDmeHitbox *pSrcHitbox = pSrcHitboxSet->m_HitboxList[ nHitboxIndex ];
 
-			// Find bone
-			s_bonetable_t *pStudioBone = NULL;
-			const int nBoneIndex = findGlobalBone( pSrcHitbox->m_sBoneName );
-			if ( nBoneIndex >= 0 && nBoneIndex < g_numbones )
-			{
-				pStudioBone = &g_bonetable[ nBoneIndex ];
-			}
-
-			// Find bone
-			for ( int nBoneIndex = 0; nBoneIndex < g_numbones; ++nBoneIndex )
-			{
-			}
-
 			s_bbox_t *pHitbox = AllocateHitbox( pHitboxSet );
 			Q_strncpy( pHitbox->name, pSrcHitbox->m_sBoneName, sizeof( pHitbox->name ) );
 			Q_strncpy( pHitbox->hitboxname, pSrcHitbox->GetName(), sizeof( pHitbox->hitboxname ) );
@@ -4097,7 +4087,8 @@ static void LoadHitboxSetList( const CDmeHitboxSetList *pDmeHitboxSetList )
 			pHitbox->bmin = pSrcHitbox->m_vMinBounds;
 			pHitbox->bmax = pSrcHitbox->m_vMaxBounds;
 			pHitbox->flCapsuleRadius = pSrcHitbox->m_flRadius;
-			pHitbox->angOffsetOrientation = pSrcHitbox->m_qOrientation;
+			const Vector &vOrientation = pSrcHitbox->m_vOrientation;
+			pHitbox->angOffsetOrientation.Init( vOrientation.x, vOrientation.y, vOrientation.z );
 
 			if ( !pSrcHitbox->m_sSurfaceProperty.IsEmpty() )
 			{
@@ -4645,6 +4636,72 @@ static void SetupStaticProp(s_source_t *pSource) {
 
 
 //-----------------------------------------------------------------------------
+// Loads a DMX root "hitboxSetList" into g_StudioMdlContext.hitboxsets (the same
+// container the QC $hbox path and write.cpp use). Reachable from Load_DMX, so it
+// works for $model/$body/$bodygroup alike.
+//
+// Only the bone name is stored per hitbox; SetupHitBoxes() resolves it to a bone
+// index later via findGlobalBone() and also applies any bind-pose compensation.
+//-----------------------------------------------------------------------------
+static void LoadDmxHitboxes( const CDmeHitboxSetList *pDmeHitboxSetList )
+{
+    if ( !pDmeHitboxSetList )
+        return;
+
+    // Hitboxes are model-global. If any sets already exist - whether from a QC
+    // $hbox/$hboxset or an earlier DMX source - keep those and ignore this list so
+    // we don't stack duplicate/conflicting sets. First to populate wins.
+    if ( !g_StudioMdlContext.hitboxsets.empty() )
+    {
+        MdlWarning( "DMX hitboxSetList ignored: hitbox sets already defined "
+            "(via $hbox/$hboxset or an earlier DMX source)\n" );
+        return;
+    }
+
+    const int nHitboxSetCount = pDmeHitboxSetList->m_HitboxSetList.Count();
+    for ( int nSet = 0; nSet < nHitboxSetCount; ++nSet )
+    {
+        CDmeHitboxSet *pSrcHitboxSet = pDmeHitboxSetList->m_HitboxSetList[ nSet ];
+
+        const int nHitboxCount = pSrcHitboxSet->m_HitboxList.Count();
+
+        // Skip empty sets so we don't leave a stray "default" set that would
+        // suppress auto-generation in SetupHitBoxes().
+        if ( nHitboxCount == 0 )
+            continue;
+
+        g_StudioMdlContext.hitboxsets.emplace_back();
+        s_hitboxset *pHitboxSet = &g_StudioMdlContext.hitboxsets.back();
+        memset( pHitboxSet, 0, sizeof( s_hitboxset ) );
+        Q_strncpy( pHitboxSet->hitboxsetname, pSrcHitboxSet->GetName(), sizeof( pHitboxSet->hitboxsetname ) );
+
+        for ( int nBox = 0; nBox < nHitboxCount; ++nBox )
+        {
+            if ( pHitboxSet->numhitboxes >= (int)pHitboxSet->hitbox.size() )
+            {
+                MdlWarning( "Too many hitboxes for hitbox set \"%s\", max %d\n",
+                    pHitboxSet->hitboxsetname, (int)pHitboxSet->hitbox.size() );
+                break;
+            }
+
+            CDmeHitbox *pSrcHitbox = pSrcHitboxSet->m_HitboxList[ nBox ];
+            s_bbox_t *pHitbox = &pHitboxSet->hitbox[ pHitboxSet->numhitboxes++ ];
+
+            Q_strncpy( pHitbox->name, pSrcHitbox->m_sBoneName, sizeof( pHitbox->name ) );
+            Q_strncpy( pHitbox->hitboxname, pSrcHitbox->GetName(), sizeof( pHitbox->hitboxname ) );
+            pHitbox->group = pSrcHitbox->m_nGroupId;
+            // Match Cmd_Hitbox's scale_vertex() so DMX hitboxes respect $scale.
+            pHitbox->bmin = pSrcHitbox->m_vMinBounds.Get() * g_currentscale;
+            pHitbox->bmax = pSrcHitbox->m_vMaxBounds.Get() * g_currentscale;
+            pHitbox->flCapsuleRadius = pSrcHitbox->m_flRadius;
+            const Vector &vOrientation = pSrcHitbox->m_vOrientation.Get();
+            pHitbox->angOffsetOrientation.Init( vOrientation.x, vOrientation.y, vOrientation.z );
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
 // Main entry point for loading DMX files
 //-----------------------------------------------------------------------------
 int Load_DMX(s_source_t *pSource) {
@@ -4681,6 +4738,14 @@ int Load_DMX(s_source_t *pSource) {
         goto dmxError;
 
     LoadQcModelElements(pSource, g_pCurrentModel, pModel);
+
+    // Deal with hitbox sets. Ok to pass NULL for CDmeHitboxSetList.
+    // Only load these for actual model bodies ($body/$bodygroup/$model);
+    // g_pCurrentModel is NULL when this DMX is an $animation/$sequence source,
+    // which must not contribute model-global hitboxes.
+    if (g_pCurrentModel) {
+        LoadDmxHitboxes(pRoot->GetValueElement<CDmeHitboxSetList>("hitboxSetList"));
+    }
 
     CDmeAnimationList *pAnimationList = pRoot->GetValueElement<CDmeAnimationList>("animationList");
     if (pAnimationList) {

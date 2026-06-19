@@ -46,6 +46,14 @@ void CDmeBBox::OnDestruction()
 
 
 //-----------------------------------------------------------------------------
+// Visualization only; studiomdl is headless so this is a no-op.
+//-----------------------------------------------------------------------------
+void CDmeBBox::Draw( const matrix3x4_t &shapeToWorld, CDmeDrawSettings *pDrawSettings )
+{
+}
+
+
+//-----------------------------------------------------------------------------
 //
 //-----------------------------------------------------------------------------
 void CDmeBBox::Clear()
