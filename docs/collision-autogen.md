@@ -201,6 +201,27 @@ engine on load. Fix the request and recompile:
 The same halt-on-error applies to setup mistakes: an unknown `$rendermesh`, a bone
 not found in the mesh, or a bone not present in the compiled model.
 
+## Performance (`-collisionthreads`)
+
+Convex decomposition is the slowest part of generating collision. Two things keep
+it fast:
+
+- The voxel grid VHACD uses is scaled to the requested detail (`hull` / `maxverts`)
+  rather than always running at maximum resolution. Coarse requests - the common
+  case - decompose on a much smaller grid; high-detail requests are unaffected.
+- VHACD can parallelize its work across CPU cores. This is controlled by the
+  command-line flag:
+
+```
+-collisionthreads <int>
+```
+
+A value of `2` or more enables multithreaded decomposition (the default is `4`); a
+value of `1` or less forces the single-threaded path, which is fully deterministic
+(identical output regardless of machine). Use `-collisionthreads 1` if you need
+byte-for-byte reproducible `.phy` output across different machines; otherwise the
+default is faster on multi-core systems and produces equivalent collision.
+
 ## Notes and limitations
 
 - A `$rendermesh` is mandatory; there is no generation from the collision source.

@@ -11,9 +11,12 @@
 #include <vector>
 #include <cstdint>
 
-// VHACD is multithreaded by default; we run it synchronously (m_asyncACD=false)
-// inside the batch compiler, so the std::thread machinery is unused but still
-// compiled.  Define the implementation exactly once, here.
+#include "tier0/icommandline.h"
+
+// VHACD is multithreaded by default.  Threading here is conditional on the
+// -collisionthreads CLI flag (see DecomposeConvex): >=2 enables VHACD's async
+// split-plane search across cores, <=1 forces the single-threaded path.  Define
+// the implementation exactly once, here.
 #define ENABLE_VHACD_IMPLEMENTATION 1
 #include "VHACD.h"
 
@@ -66,7 +69,11 @@ bool DecomposeConvex( const CUtlVector<Vector> &verts,
 	NullLogger logger;
 	VHACD::IVHACD::Parameters params;
 	params.m_logger   = &logger;
-	params.m_asyncACD = false;          // run on the calling thread, deterministic order
+
+	// -collisionthreads >=2 lets VHACD parallelize its split-plane search across
+	// cores; <=1 keeps the single-threaded, fully-deterministic path.  Default 4.
+	int nThreads = CommandLine()->ParmValue( "-collisionthreads", 4 );
+	params.m_asyncACD = ( nThreads >= 2 );
 
 	// The downstream physics packer (minicollision) re-hulls each piece with a
 	// small incremental convex-hull builder and rejects anything that isn't a
@@ -89,6 +96,14 @@ bool DecomposeConvex( const CUtlVector<Vector> &verts,
 
 	if ( maxHulls < 1 ) maxHulls = 1;
 	params.m_maxConvexHulls = (uint32_t)maxHulls;
+
+	// Voxel budget is VHACD's master cost knob (default 400k = max quality).  Our
+	// hulls are capped coarse (maxHulls and maxVerts are small) and then re-hulled
+	// by minicollision, so the extra precision from a huge grid is discarded.  Scale
+	// the grid to the requested detail and cap at the old 400k default: high-detail
+	// requests keep their original behavior, coarse ones run on a much smaller grid.
+	uint32_t res = 60000u + (uint32_t)maxHulls * (uint32_t)maxVerts * 1500u;
+	params.m_resolution = ( res > 400000u ) ? 400000u : res;
 
 	VHACD::IVHACD *pVHACD = VHACD::CreateVHACD();
 	if ( !pVHACD )

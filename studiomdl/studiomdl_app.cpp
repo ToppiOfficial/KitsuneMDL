@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.3.7";
+static const char *KITSUNE_MDL_VERSION = "0.3.8";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -702,6 +702,7 @@ void UsageAndExit() {
              "[-nodx80] - skip dx80.vtx and sw.vtx output\n"
              "[-cullanims] - remove unreferenced $animations to reduce file size\n"
              "[-cullmorphs] - remove flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth to reduce file size\n"
+             "[-collisionthreads <int>] - $generate/$generatejoint convex decomposition threads: <=1 single-threaded (deterministic), >=2 multithreaded (default 4)\n"
     );
 }
 

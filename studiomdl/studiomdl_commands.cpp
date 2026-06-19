@@ -436,6 +436,15 @@ void Cmd_AddSearchDir() {
 }
 
 //-----------------------------------------------------------------------------
+// Cmd_AddIncludeDir: QC equivalent of -includedir; registers a fallback dir
+// searched when $include cannot find its file at its primary location.
+//-----------------------------------------------------------------------------
+void Cmd_AddIncludeDir() {
+    GetToken(false);
+    AddIncludeDir(token);
+}
+
+//-----------------------------------------------------------------------------
 // Cmd_Illumposition
 //-----------------------------------------------------------------------------
 void Cmd_Illumposition() {
@@ -9089,6 +9098,7 @@ MDLCommand_t g_Commands[] =
                 {"$clampworldspace",                 Cmd_ClampWorldspace,},
                 {"$maxeyedeflection",                Cmd_MaxEyeDeflection,},
                 {"$addsearchdir",                    Cmd_AddSearchDir,},
+                {"$addincludedir",                   Cmd_AddIncludeDir,},
                 {"$subd",                            Cmd_SubdivisionSurface,},
                 {"$boneflexdriver",                  Cmd_BoneFlexDriver,},
                 {"$modelbudget",                     Cmd_ModelBudget,},
