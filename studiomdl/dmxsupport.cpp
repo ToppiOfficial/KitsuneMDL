@@ -4096,6 +4096,8 @@ static void LoadHitboxSetList( const CDmeHitboxSetList *pDmeHitboxSetList )
 			pHitbox->group = pSrcHitbox->m_nGroupId;
 			pHitbox->bmin = pSrcHitbox->m_vMinBounds;
 			pHitbox->bmax = pSrcHitbox->m_vMaxBounds;
+			pHitbox->flCapsuleRadius = pSrcHitbox->m_flRadius;
+			pHitbox->angOffsetOrientation = pSrcHitbox->m_qOrientation;
 
 			if ( !pSrcHitbox->m_sSurfaceProperty.IsEmpty() )
 			{

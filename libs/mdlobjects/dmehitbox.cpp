@@ -30,6 +30,8 @@ void CDmeHitbox::OnConstruction()
 	m_nGroupId.Init( this, "groupId" );
 	m_sBoneName.Init( this, "boneName" );
 	m_cRenderColor.InitAndSet( this, "renderColor", Color( 255, 255, 255, 64 ) );
+	m_flRadius.InitAndSet( this, "radius", -1.0f );
+	m_qOrientation.InitAndSet( this, "orientation", QAngle( 0.0f, 0.0f, 0.0f ) );
 
 	// Set by CDmeBBox to FLT_MAX, -FLT_MAX
 	m_vMinBounds = Vector( 0.0f, 0.0f, 0.0f );

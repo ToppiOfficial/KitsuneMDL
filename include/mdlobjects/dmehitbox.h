@@ -1,4 +1,4 @@
-//====== Copyright © 1996-2004, Valve Corporation, All rights reserved. =====//
+//====== Copyright ï¿½ 1996-2004, Valve Corporation, All rights reserved. =====//
 //
 // Dme version of a hitbox
 //
@@ -30,6 +30,8 @@ public:
 	CDmaVar< int > m_nGroupId;
 	CDmaString m_sBoneName;
 	CDmaColor m_cRenderColor;	// used for visualization
+	CDmaVar< float > m_flRadius;			// "radius": -1 = OBB box, >= 0 = capsule radius
+	CDmaVar< QAngle > m_qOrientation;	// "orientation": OBB/capsule rotation offset
 
 };
 
