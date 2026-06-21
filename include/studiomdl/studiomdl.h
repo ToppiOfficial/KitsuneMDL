@@ -1633,8 +1633,6 @@ void AddSrcToSrc(s_source_t *pOrigSource, s_source_t *pAppendSource, matrix3x4_t
 
 void AddSrcToSrc(s_source_t *pOrigSource, s_source_t *pAppendSource);
 
-int Load_VRM(s_source_t *psource);
-
 int Load_SMD(s_source_t *psource);
 
 int Load_VTA(s_source_t *psource);

@@ -6,7 +6,7 @@ name, by material name, or both, without modifying the source file or
 duplicating it on disk.
 
 DmeMesh filtering (`"<meshName>"` entries and `defaultState`) requires a DMX
-source. SMD, OBJ, and VRM sources are not compatible with that part and will
+source. SMD and OBJ sources are not compatible with that part and will
 produce a warning if mesh overrides are listed. `removematerial` works on any
 source format.
 
@@ -63,7 +63,7 @@ you can combine both to first isolate a subset of meshes and then strip
 individual materials from the result.
 
 `removematerial` does not require DmeMesh tracking data and works on any
-source format (DMX, SMD, OBJ, VRM). It runs after the DmeMesh mesh filter
+source format (DMX, SMD, OBJ). It runs after the DmeMesh mesh filter
 when both are present.
 
 **`nofacial`** (optional, no argument)
@@ -178,7 +178,7 @@ $body body body_noflex
   only (no path, no `.vmt` extension), matching how materials are referenced
   inside the source file.
 - DmeMesh filtering (`"<meshName>"` entries) is DMX-only. Listing mesh names
-  for an SMD/OBJ/VRM source will warn and skip that part; `removematerial`
+  for an SMD/OBJ source will warn and skip that part; `removematerial`
   entries on the same definition still apply normally.
 - `nofacial` affects only the clone produced by this `$rendermesh` definition.
   The source file's flex data is left intact for every other reference.

@@ -888,7 +888,7 @@ s_source_t *Load_Source(const char *name, const char *ext, bool reverse, bool is
     // SMD variants come first so that extensionless names resolve to SMD by default,
     // matching the Valve SDK documentation ("file extension must be defined for formats
     // other than SMD"). Non-SMD formats are still tried as fallback when no .smd exists.
-    std::array<std::pair<const char *, load_proc>, 9> supported_formats = {
+    std::array<std::pair<const char *, load_proc>, 8> supported_formats = {
             std::make_pair("smd", Load_SMD),
             std::make_pair("sma", Load_SMD),
             std::make_pair("phys", Load_SMD),
@@ -896,7 +896,6 @@ s_source_t *Load_Source(const char *name, const char *ext, bool reverse, bool is
             std::make_pair("dmx", Load_DMX),
             std::make_pair("mpp", Load_DMX),
             std::make_pair("obj", Load_OBJ),
-            std::make_pair("vrm", Load_VRM),
             std::make_pair("xml", Load_DMX)
     };
     // build list of directories to search: primary first, then $addsearchdir fallbacks

@@ -44,7 +44,6 @@ void InstallSFMV6Importer( IDataModel *pFactory );
 void InstallSFMV7Importer( IDataModel *pFactory );
 void InstallSFMV8Importer( IDataModel *pFactory );
 void InstallSFMV9Importer( IDataModel *pFactory );
-void InstallVMFImporter( IDataModel *pFactory );
 void InstallMKSImporter( IDataModel *pFactory );
 void InstallTEXImporter( IDataModel *pFactory );
 

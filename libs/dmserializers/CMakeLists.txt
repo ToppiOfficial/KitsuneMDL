@@ -22,7 +22,6 @@ add_library(dmserializers
         importactbusy.cpp
         dmebaseimporter.cpp
         importkeyvaluebase.cpp
-        importvmf.cpp
         importsfmv9.cpp
         importsfmv3.cpp
         importmks.cpp

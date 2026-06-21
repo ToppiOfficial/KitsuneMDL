@@ -37,8 +37,6 @@
 #include "movieobjects/dmeunpackoperators.h"
 #include "movieobjects/dmeexpressionoperator.h"
 #include "movieobjects/dmeinput.h"
-#include "movieobjects/dmekeyboardinput.h"
-#include "movieobjects/dmemouseinput.h"
 #include "movieobjects/dmechannel.h"
 #include "movieobjects/dmelog.h"
 #include "movieobjects/dmetrack.h"

@@ -3080,7 +3080,6 @@ InitReturnVal_t CDmSerializers::Init()
 	InstallActBusyImporter( g_pDataModel );
 	InstallCommentaryImporter( g_pDataModel );
 	InstallVMTImporter( g_pDataModel );
-	InstallVMFImporter( g_pDataModel );
 	InstallMKSImporter( g_pDataModel );
 	InstallTEXImporter( g_pDataModel );
 

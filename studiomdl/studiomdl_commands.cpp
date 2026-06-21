@@ -1290,12 +1290,6 @@ void Option_Spherenormals(s_source_t *psource) {
                 } else {
                     vertex[k].normal = n;
                 }
-#if 0
-                vertex[k].normal[0] += 0.5f * ( 2.0f * ( ( float )rand() ) / ( float )VALVE_RAND_MAX ) - 1.0f;
-                vertex[k].normal[1] += 0.5f * ( 2.0f * ( ( float )rand() ) / ( float )VALVE_RAND_MAX ) - 1.0f;
-                vertex[k].normal[2] += 0.5f * ( 2.0f * ( ( float )rand() ) / ( float )VALVE_RAND_MAX ) - 1.0f;
-                VectorNormalize( vertex[k].normal );
-#endif
             }
             break;
         }
@@ -3193,7 +3187,7 @@ static s_source_t *FindCachedSourceInDir(const char *dir, const char *name, cons
                 return g_source[i];
         }
     } else {
-        static const char *s_exts[] = { "vrm", "dmx", "smd", "xml", "obj" };
+        static const char *s_exts[] = { "dmx", "smd", "xml", "obj" };
         for (int e = 0; e < ARRAYSIZE(s_exts); e++) {
             Q_snprintf(g_StudioMdlContext.szFilename, sizeof(g_StudioMdlContext.szFilename), "%s%s.%s", dir, name, s_exts[e]);
             for (i = 0; i < g_numsources; i++) {
