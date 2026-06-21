@@ -58,6 +58,10 @@ compile_commands.json
 *.bak
 *.swp
 
+# Windows Resource Compiler (rc.exe) scratch files
+RC[a-z][0-9]*
+*.res
+
 # vcpkg
 vcpkg_installed/
 

@@ -1,6 +1,6 @@
 # DMX hitboxes (and capsule hitboxes)
 
-KitsuneMDL can read hitboxes directly from a DMX `hitboxSetList` when the DMX is
+PulseMDL can read hitboxes directly from a DMX `hitboxSetList` when the DMX is
 referenced by `$body`, `$bodygroup`, or `$model`. This lets a DMX authoring tool
 ship hitboxes (including CS:GO-style capsule hitboxes) inside the model file
 instead of, or in addition to, the QC `$hbox` command.

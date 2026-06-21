@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.4.1";
+static const char *PULSE_MDL_VERSION = "0.4.2";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -709,6 +709,8 @@ void UsageAndExit() {
 //-----------------------------------------------------------------------------
 // The application object
 //-----------------------------------------------------------------------------
+// Disabled: standalone -dmxconvert CLI is not needed; DMX conversion is handled internally.
+#if 0
 static int RunEmbeddedDmxConvert() {
     MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f, false, false, false, false);
     g_pDataModel->OnlyCreateUntypedElements(true);
@@ -766,6 +768,7 @@ static int RunEmbeddedDmxConvert() {
     g_pDataModel->RemoveFileId(pRoot->GetFileId());
     return 0;
 }
+#endif
 
 int CStudioMDLApp::Main() {
     g_StudioMdlContext.numverts = g_StudioMdlContext.numnormals = g_StudioMdlContext.numfaces = 0;
@@ -776,8 +779,9 @@ int CStudioMDLApp::Main() {
     // This bit of hackery allows us to access files on the harddrive
     g_pFullFileSystem->AddSearchPath("", "LOCAL", PATH_ADD_TO_HEAD);
 
-    if (CommandLine()->FindParm("-dmxconvert"))
-        return RunEmbeddedDmxConvert();
+    // Disabled: standalone -dmxconvert CLI is not needed; DMX conversion is handled internally.
+    // if (CommandLine()->FindParm("-dmxconvert"))
+    //     return RunEmbeddedDmxConvert();
 
     int nReturnValue;
     if (HandleMdlReport(nReturnValue))
@@ -947,7 +951,7 @@ int CStudioMDLApp::Main() {
 // The application object
 //-----------------------------------------------------------------------------
 bool CStudioMDLApp::Create() {
-    printf("KitsuneMDL v%s\n", KITSUNE_MDL_VERSION);
+    printf("PulseMDL v%s\n", PULSE_MDL_VERSION);
 
     // Ensure that cmdlib spew function & associated state is initialized
     InstallSpewFunction();

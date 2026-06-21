@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(studiomdl_v2)
+project(PulseMDL)
 
 set(CMAKE_CXX_STANDARD 14)
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -42,7 +42,23 @@ add_subdirectory(libs/filesystem)
 add_subdirectory(libs/minicollision)
 
 
-add_executable(kitsunemdl
+# Windows: embed the application icon + version info into the .exe.
+# The .rc is always compiled (for version metadata). The icon line inside it is
+# guarded by PULSEMDL_HAS_ICON, which we only define when the .ico is present, so
+# the build keeps working until studiomdl/resources/pulsemdl.ico is added.
+# set(PULSEMDL_RESOURCES "")
+# if(WIN32)
+#     enable_language(RC)
+#     set(PULSEMDL_RC "${CMAKE_CURRENT_SOURCE_DIR}/studiomdl/resources/pulsemdl.rc")
+#     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/studiomdl/resources/pulsemdl.ico")
+#         set_source_files_properties(${PULSEMDL_RC} PROPERTIES COMPILE_DEFINITIONS PULSEMDL_HAS_ICON)
+#     else()
+#         message(STATUS "pulsemdl: studiomdl/resources/pulsemdl.ico not found; building without an embedded icon (version info still embedded).")
+#     endif()
+#     set(PULSEMDL_RESOURCES ${PULSEMDL_RC})
+# endif()
+
+add_executable(pulsemdl
         studiomdl/dmxsupport.cpp
         studiomdl/mrmsupport.cpp
         studiomdl/v1support.cpp
@@ -65,10 +81,11 @@ add_executable(kitsunemdl
         studiomdl/collisionmodelsource.cpp
         studiomdl/convexdecompose.cpp
         studiomdl/studiomdl_app.h
+        ${PULSEMDL_RESOURCES}
 )
-target_compile_definitions(kitsunemdl PRIVATE -DSTATIC_TIER0)
-target_include_directories(kitsunemdl PUBLIC include libs/minicollision libs/vhacd)
-target_link_libraries(kitsunemdl PRIVATE
+target_compile_definitions(pulsemdl PRIVATE -DSTATIC_TIER0)
+target_include_directories(pulsemdl PUBLIC include libs/minicollision libs/vhacd)
+target_link_libraries(pulsemdl PRIVATE
         tier0
         tier1
         tier2
@@ -88,5 +105,5 @@ target_link_libraries(kitsunemdl PRIVATE
         minicollision
         )
 
-set_property(TARGET kitsunemdl PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+set_property(TARGET pulsemdl PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
 
