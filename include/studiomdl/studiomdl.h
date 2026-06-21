@@ -88,7 +88,7 @@ class CDmeCombinationOperator;
 //   animation         MAXSTUDIOANIMS (8192)     3000
 //-----------------------------------------------------------------------------
 #define MAXSTUDIOBONEWEIGHTS    3
-#define MAXSTUDIOCMDS            64
+#define MAXSTUDIOCMDS            128
 #define MAXSTUDIOMOVEKEYS        64
 #define MAXSTUDIOIKRULES        64
 #define MAXSTUDIONAME            128
@@ -96,6 +96,18 @@ class CDmeCombinationOperator;
 #define MAXSTUDIOTAGS            1024
 
 #define MAXSTUDIOSRCVERTS        (8*65536*8)
+
+//-----------------------------------------------------------------------------
+// PulseMDL tunable feature limits
+// (capacities for PulseMDL-added QC features; edit here rather than hunting
+//  through the .cpp implementation files)
+//-----------------------------------------------------------------------------
+// $rendermesh: named filtered views of DMX files (studiomdl_commands.cpp)
+#define MAX_RENDERMESH_DEFS             512     // total $rendermesh definitions
+#define MAX_RENDERMESH_OVERRIDES        256     // per-def mesh overrides
+#define MAX_RENDERMESH_MATERIAL_REMOVES 256     // per-def material removals
+// Conditional ($if/$switch) stacking limits live in scriplib.h (libs/utils),
+// since that parsing lives below the studiomdl layer.
 
 #ifndef EXTERN
 #define EXTERN extern
@@ -147,7 +159,6 @@ EXTERN    bool g_bLegacyVTX;
 
 EXTERN    bool g_realignbones;
 EXTERN    bool g_definebones;
-EXTERN  bool g_bSkinnedLODs;
 
 EXTERN  byte g_constdirectionalightdot;
 
@@ -188,7 +199,6 @@ struct SurfacePropName_t {
 //////////////////////////////////////////////////////////////////////////
 
 struct GameInfo_t {
-    bool bSupportsXBox360;
     bool bSupportsDX8;
 };
 extern struct GameInfo_t g_gameinfo;
@@ -2011,6 +2021,7 @@ struct StudioMdlContext {
     float minZeroFramePosDelta;
     float defaultFadeInTime;
     float defaultFadeOutTime;
+    float defaultFPS;
     char szFilename[1024];
     FILE *fpInput;
     char szLine[4096];
@@ -2108,6 +2119,7 @@ struct StudioMdlContext {
               minZeroFramePosDelta(2.0f),
               defaultFadeInTime(0.2f),
               defaultFadeOutTime(0.2f),
+              defaultFPS(30.0f),
               fpInput(nullptr),
               iLinecount(0),
               vecMinWorldspace(MIN_COORD_INTEGER, MIN_COORD_INTEGER, MIN_COORD_INTEGER),

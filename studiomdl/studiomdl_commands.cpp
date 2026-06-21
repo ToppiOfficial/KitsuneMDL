@@ -25,11 +25,9 @@ extern StudioMdlContext g_StudioMdlContext;
 
 //-----------------------------------------------------------------------------
 // $rendermesh: named filtered views of DMX files
+// Capacity limits (MAX_RENDERMESH_*) are defined in studiomdl.h alongside the
+// other PulseMDL tunable feature limits.
 //-----------------------------------------------------------------------------
-
-#define MAX_RENDERMESH_DEFS             512
-#define MAX_RENDERMESH_OVERRIDES        256
-#define MAX_RENDERMESH_MATERIAL_REMOVES 256
 
 struct s_rendermesh_override_t {
     char meshName[MAXSTUDIONAME];
@@ -2647,36 +2645,6 @@ void Cmd_Root() {
     }
 }
 
-void Cmd_Controller() {
-    if (GetToken(false)) {
-        if (!stricmp("mouth", token)) {
-            g_bonecontroller[g_numbonecontrollers].inputfield = 4;
-        } else {
-            g_bonecontroller[g_numbonecontrollers].inputfield = verify_atoi(token);
-        }
-        if (GetToken(false)) {
-            strcpyn(g_bonecontroller[g_numbonecontrollers].name, token);
-            GetToken(false);
-            if ((g_bonecontroller[g_numbonecontrollers].type = lookupControl(token)) == -1) {
-                MdlWarning("unknown g_bonecontroller type '%s'\n", token);
-                return;
-            }
-            GetToken(false);
-            g_bonecontroller[g_numbonecontrollers].start = verify_atof(token);
-            GetToken(false);
-            g_bonecontroller[g_numbonecontrollers].end = verify_atof(token);
-
-            if (g_bonecontroller[g_numbonecontrollers].type & (STUDIO_XR | STUDIO_YR | STUDIO_ZR)) {
-                if (((int) (g_bonecontroller[g_numbonecontrollers].start + 360) % 360) ==
-                    ((int) (g_bonecontroller[g_numbonecontrollers].end + 360) % 360)) {
-                    g_bonecontroller[g_numbonecontrollers].type |= STUDIO_RLOOP;
-                }
-            }
-            g_numbonecontrollers++;
-        }
-    }
-}
-
 void Cmd_ScreenAlign() {
     if (GetToken(false)) {
 
@@ -3580,9 +3548,16 @@ void Cmd_AmbientBoost() {
 }
 
 //-----------------------------------------------------------------------------
-// Indicates the model contains a quad-only Catmull-Clark subd mesh
+// Indicates the model contains a quad-only Catmull-Clark subd mesh.
+// Subdivision tessellation relies on the topology indices that only exist in the
+// Alien Swarm/CS:GO VTX format (-vtxformat 1); on the default TF2/L4D2 format
+// (g_bLegacyVTX) it has no effect, so ignore it entirely with a warning.
 //-----------------------------------------------------------------------------
 void Cmd_SubdivisionSurface() {
+    if (g_bLegacyVTX) {
+        MdlWarning("$subd ignored: subdivision surfaces require -vtxformat 1 (Alien Swarm/CS:GO VTX format)\n");
+        return;
+    }
     gflags |= STUDIOHDR_FLAGS_SUBDIVISION_SURFACE;
 }
 
@@ -4707,10 +4682,6 @@ void Cmd_NoCollapseBones() {
     g_StudioMdlContext.no_collapse_bones = true;
 }
 
-void Cmd_SkinnedLODs() {
-    g_bSkinnedLODs = true;
-}
-
 void Cmd_AlwaysCollapse() {
     GetToken(false);
     g_collapse.AddToTail(strdup(token));
@@ -4947,6 +4918,17 @@ void Cmd_SetDefaultFadeOutTime() {
         return;
 
     g_StudioMdlContext.defaultFadeOutTime = verify_atof(token);
+}
+
+void Cmd_SetDefaultFPS() {
+    if (!GetToken(false))
+        return;
+
+    float fps = verify_atof(token);
+    if (fps <= 0.0f) {
+        TokenError("$defaultfps (%f from '%s') must be > 0.0\n", fps, token);
+    }
+    g_StudioMdlContext.defaultFPS = fps;
 }
 
 void Cmd_LCaseAllSequences() {
@@ -6675,7 +6657,7 @@ void Cmd_Animation() {
     VectorCopy(g_defaultadjust, panim->adjust);
     panim->rotation = g_defaultrotation;
     panim->scale = 1.0f;
-    panim->fps = 30.0;
+    panim->fps = g_StudioMdlContext.defaultFPS;
     panim->motionrollback = g_StudioMdlContext.defaultMotionRollback;
 
     ParseAnimation(panim, false);
@@ -6795,7 +6777,7 @@ s_animation_t *ProcessImpliedAnimation(s_sequence_t *psequence, const char *file
     VectorCopy(g_defaultadjust, panim->adjust);
     panim->scale = 1.0f;
     panim->rotation = g_defaultrotation;
-    panim->fps = 30;
+    panim->fps = g_StudioMdlContext.defaultFPS;
     panim->motionrollback = g_StudioMdlContext.defaultMotionRollback;
 
     //panim->source = Load_Source( panim->filename, "smd" );
@@ -8624,7 +8606,7 @@ static void DP_RegisterInMemoryAnim(const char *animName,
     VectorCopy(g_defaultadjust, pa->adjust);
     pa->rotation       = g_defaultrotation;
     pa->scale          = 1.0f;
-    pa->fps            = 30.0f;
+    pa->fps            = g_StudioMdlContext.defaultFPS;
     pa->motionrollback = g_StudioMdlContext.defaultMotionRollback;
 }
 
@@ -8992,7 +8974,6 @@ MDLCommand_t g_Commands[] =
                 {"$popd",                            Cmd_Popd,},
                 {"$scale",                           Cmd_ScaleUp,},
                 {"$root",                            Cmd_Root,},
-                {"$controller",                      Cmd_Controller,},
                 {"$screenalign",                     Cmd_ScreenAlign,},
                 {"$worldalign",                      Cmd_WorldAlign,},
                 {"$model",                           Cmd_Model,},
@@ -9038,7 +9019,6 @@ MDLCommand_t g_Commands[] =
                 {"$bonealwayssetup",                 Cmd_BoneAlwaysSetup,},
                 {"$externaltextures",                Cmd_ExternalTextures,},
                 {"$cliptotextures",                  Cmd_ClipToTextures,},
-                {"$skinnedLODs",                     Cmd_SkinnedLODs,},
                 {"$renamebone",                      Cmd_Renamebone,},
                 {"$stripboneprefix",                 Cmd_StripBonePrefix,},
                 {"$renamebonesubstr",                Cmd_RenameBoneSubstr,},
@@ -9100,6 +9080,7 @@ MDLCommand_t g_Commands[] =
                 {"$lcaseallsequences",               Cmd_LCaseAllSequences,},
                 {"$defaultfadein",                   Cmd_SetDefaultFadeInTime,},
                 {"$defaultfadeout",                  Cmd_SetDefaultFadeOutTime,},
+                {"$defaultfps",                      Cmd_SetDefaultFPS,},
                 {"$allowactivityname",               Cmd_AllowActivityName,},
                 {"$collisionprecision",              Cmd_CollisionPrecision,},
                 {"$collisionmodel",                  Cmd_CollisionModel,},

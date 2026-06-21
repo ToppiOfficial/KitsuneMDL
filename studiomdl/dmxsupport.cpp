@@ -43,6 +43,15 @@ extern StudioMdlContext g_StudioMdlContext;
 //-----------------------------------------------------------------------------
 s_model_t *g_pCurrentModel = NULL;
 
+// True only when the current DMX load is for a real model body
+// ($body/$bodygroup/$model/$rendermesh). Specialized model-rig DME elements
+// (jigglebones, attachments, bone constraints, eyeballs, hitboxes) are parsed
+// only in this case, so they are never "late-parsed" out of a DMX that is
+// referenced solely as an $animation/$sequence/$collision/$staticproppose source.
+static inline bool LoadingModelBody() {
+    return g_pCurrentModel != NULL && !g_bLoadingStaticPropPose;
+}
+
 
 void UnifyIndices(s_source_t *psource);
 void BuildIndividualMeshes(s_source_t *pSource);
@@ -1129,9 +1138,10 @@ AddDagJoint(CDmeModel *pModel, CDmeDag *pDag, std::array<s_node_t,MAXSTUDIOSRCBO
         }
     }
 
-    // Skip jigglebones when loading a $staticproppose pose source; it contributes
-    // bone transforms only and must not leak jigglebones into the model.
-    if (!g_bLoadingStaticPropPose)
+    // Parse jigglebones only for real model-body loads. A DMX used solely as an
+    // $animation/$sequence/$collision/$staticproppose source must not leak its
+    // jigglebones into the model (they register into the g_jigglebones[] globals).
+    if (LoadingModelBody())
         HandleDmeJiggleBone(pDag);
 
     Q_strncpy(pNodes[nJointIndex].name, pDag->GetName(), sizeof(pNodes[nJointIndex].name));
@@ -1755,7 +1765,12 @@ LoadModelAndSkeleton(s_source_t *pSource, BoneTransformMap_t &boneMap, CDmeDag *
         MdlError("Error - dmx has no contents: %s\n", pSource->filename);
     }
 
-    if (pCombinationOperator) {
+    // Flex data (controllers, rules, localvars, flexdescs) is model-rig data: AddCombination
+    // registers it into the global g_flexcontroller[]/g_flexdesc[]/g_flexrule[] tables. Only
+    // parse it for real model-body loads ($body/$bodygroup/$model/$rendermesh) so a DMX
+    // referenced solely as an $animation/$sequence/$collision/$staticproppose source (or a
+    // $driverbone triggerpose) does not leak its flex rig into the model.
+    if (pCombinationOperator && LoadingModelBody()) {
         AddFlexKeys(pModel, pModel, pCombinationOperator, pSource);
         AddCombination(pSource, pCombinationOperator);
 
@@ -1782,7 +1797,10 @@ LoadModelAndSkeleton(s_source_t *pSource, BoneTransformMap_t &boneMap, CDmeDag *
         }
     }
 
-    LoadAttachments(pSkeleton, pSkeleton, pSource, bStaticProp);
+    // Attachments are model-rig data: only parse them for real model-body loads so a
+    // DMX referenced solely as an animation/collision source does not contribute them.
+    if (LoadingModelBody())
+        LoadAttachments(pSkeleton, pSkeleton, pSource, bStaticProp);
 
     return true;
 }
@@ -4727,9 +4745,10 @@ int Load_DMX(s_source_t *pSource) {
     // Load model info
     LoadModelInfo(pRoot, pFullPath);
 
-    // Load constraints. Skip for a $staticproppose pose source, which supplies bone
-    // transforms only and must not leak twist bones / constraints into the model.
-    if (!g_bLoadingStaticPropPose)
+    // Load bone constraints only for real model-body loads. They are model-rig data;
+    // a DMX referenced solely as an $animation/$sequence/$collision/$staticproppose
+    // source must not leak twist bones / constraints into the model.
+    if (LoadingModelBody())
         LoadConstraints(pRoot);
 
     // Extract out the skeleton
@@ -4745,10 +4764,10 @@ int Load_DMX(s_source_t *pSource) {
     LoadQcModelElements(pSource, g_pCurrentModel, pModel);
 
     // Deal with hitbox sets. Ok to pass NULL for CDmeHitboxSetList.
-    // Only load these for actual model bodies ($body/$bodygroup/$model);
-    // g_pCurrentModel is NULL when this DMX is an $animation/$sequence source,
-    // which must not contribute model-global hitboxes.
-    if (g_pCurrentModel) {
+    // Only load these for actual model bodies ($body/$bodygroup/$model/$rendermesh);
+    // a DMX referenced solely as an $animation/$sequence/$collision source must not
+    // contribute model-global hitboxes.
+    if (LoadingModelBody()) {
         LoadDmxHitboxes(pRoot->GetValueElement<CDmeHitboxSetList>("hitboxSetList"));
     }
 
@@ -4876,9 +4895,6 @@ bool LoadPreprocessedFile(const char *pFileName, float flScale) {
 			ProcessModelName( pMdlPath );
 		}
 	}
-
-	// Get whether we're doing skinned LODs from the pre-process file
-	g_bSkinnedLODs = pRoot->GetValue< bool >( "skinnedLODs", false );
 
 	// Load model info
 	LoadModelInfo( pRoot, pFullPath );

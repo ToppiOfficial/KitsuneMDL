@@ -367,9 +367,7 @@ Conditional processing ($if/$elif/$else, $switch/$case/$default)
 */
 
 static int s_conditionalDepth = 0;
-static const int k_MaxConditionalNesting = 3;
-static const int k_MaxElifCount = 8;
-static const int k_MaxCaseCount = 24;
+// Tunable nesting/branch limits live in scriplib.h (MAX_CONDITIONAL_*).
 
 typedef struct {
     char* data;
@@ -399,17 +397,16 @@ static void ScripBuf_Steal(ScripBuf* dst, ScripBuf* src) {
     ScripBuf_Init(src);
 }
 
-#define SCRIPLIB_MAX_COND_TOKENS 64
 typedef struct {
-    char toks[SCRIPLIB_MAX_COND_TOKENS][MAXTOKEN];
+    char toks[MAX_CONDITIONAL_TOKENS][MAXTOKEN];
     int  count;
 } CondToks;
 
 static void CondToks_Init(CondToks* c) { c->count = 0; }
 
 static void CondToks_Push(CondToks* c, const char* tok) {
-    if (c->count >= SCRIPLIB_MAX_COND_TOKENS)
-        Error("$if: too many tokens in condition (max %d)\n", SCRIPLIB_MAX_COND_TOKENS);
+    if (c->count >= MAX_CONDITIONAL_TOKENS)
+        Error("$if: too many tokens in condition (max %d)\n", MAX_CONDITIONAL_TOKENS);
     V_strncpy(c->toks[c->count++], tok, MAXTOKEN);
 }
 
@@ -638,8 +635,8 @@ static bool s_evalConditionTokens(CondToks* toks) {
 }
 
 static void ProcessIfDirective() {
-    if (++s_conditionalDepth > k_MaxConditionalNesting) {
-        Error("$if: maximum nesting depth (%d) exceeded\n", k_MaxConditionalNesting);
+    if (++s_conditionalDepth > MAX_CONDITIONAL_NESTING) {
+        Error("$if: maximum nesting depth (%d) exceeded\n", MAX_CONDITIONAL_NESTING);
         --s_conditionalDepth; return;
     }
 
@@ -667,8 +664,8 @@ static void ProcessIfDirective() {
         s_peekRawWord(peeked, sizeof(peeked));
         if (!Q_stricmp(peeked, "$elif")) {
             GetToken(true); // consume the $elif token
-            if (++elifCount > k_MaxElifCount)
-                Error("$if: maximum $elif count (%d) exceeded\n", k_MaxElifCount);
+            if (++elifCount > MAX_CONDITIONAL_ELIF)
+                Error("$if: maximum $elif count (%d) exceeded\n", MAX_CONDITIONAL_ELIF);
             CondToks toks; CondToks_Init(&toks);
             if (!s_readConditionTokens(&toks)) break;
             bool cond = s_evalConditionTokens(&toks);
@@ -698,8 +695,8 @@ static void ProcessIfDirective() {
 }
 
 static void ProcessSwitchDirective() {
-    if (++s_conditionalDepth > k_MaxConditionalNesting) {
-        Error("$switch: maximum nesting depth (%d) exceeded\n", k_MaxConditionalNesting);
+    if (++s_conditionalDepth > MAX_CONDITIONAL_NESTING) {
+        Error("$switch: maximum nesting depth (%d) exceeded\n", MAX_CONDITIONAL_NESTING);
         --s_conditionalDepth; return;
     }
 
@@ -727,8 +724,8 @@ static void ProcessSwitchDirective() {
         if (!stricmp("}", token)) break;
 
         if (!Q_stricmp("$case", token)) {
-            if (++caseCount > k_MaxCaseCount)
-                Error("$switch: maximum $case count (%d) exceeded\n", k_MaxCaseCount);
+            if (++caseCount > MAX_CONDITIONAL_CASE)
+                Error("$switch: maximum $case count (%d) exceeded\n", MAX_CONDITIONAL_CASE);
             if (!GetToken(false)) { Error("$case: expected value\n"); break; }
             char caseVal[MAXTOKEN]; V_strncpy(caseVal, token, sizeof(caseVal));
             if (!GetToken(true) || stricmp("{", token) != 0) { Error("$case: expected '{'\n"); break; }

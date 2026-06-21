@@ -26,6 +26,15 @@ enum ScriptPathMode_t
 
 #define	MAXTOKEN	1024
 
+//-----------------------------------------------------------------------------
+// Conditional processing tunable limits ($if/$elif/$else, $switch/$case/$default)
+// Edit these to change how deeply / widely conditional blocks may stack.
+//-----------------------------------------------------------------------------
+#define MAX_CONDITIONAL_NESTING  3    // max nested $if/$switch depth
+#define MAX_CONDITIONAL_ELIF     8    // max $elif branches per $if
+#define MAX_CONDITIONAL_CASE     24   // max $case branches per $switch
+#define MAX_CONDITIONAL_TOKENS   64   // max tokens in a single condition expression
+
 extern	char	token[MAXTOKEN];
 //extern	char	*scriptbuffer,*script_p,*scriptend_p;
 extern	int		grabbed;

@@ -257,12 +257,11 @@ void Plat_ExitProcess( int nCode )
 {
 #if defined( _WIN32 ) && !defined( _X360 )
 	// We don't want global destructors in our process OR in any DLL to get executed.
-	// _exit() avoids calling global destructors in our module, but not in other DLLs.
-	const char *pchCmdLineA = Plat_GetCommandLineA();
-	if ( nCode || ( strstr( pchCmdLineA, "gc.exe" ) && strstr( pchCmdLineA, "gc.dll" ) && strstr( pchCmdLineA, "-gc" ) ) )
-	{
-		int *x = NULL; *x = 1; // cause a hard crash, GC is not allowed to exit voluntarily from gc.dll
-	}
+	// TerminateProcess avoids calling global destructors in our module or in other DLLs.
+	// NOTE: Upstream deliberately null-dereferenced here on any nonzero exit code (a
+	// game-coordinator/gc.dll watchdog hack). In a standalone CLI compiler that turned
+	// every clean Error() exit into a confusing EXCEPTION_ACCESS_VIOLATION crash, so we
+	// just terminate with the requested exit code instead.
 	TerminateProcess( GetCurrentProcess(), nCode );
 #elif defined(_PS3)
 	// We do not use this path to exit on PS3 (naturally), rather we want a clear crash:

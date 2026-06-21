@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.4.3";
+static const char *PULSE_MDL_VERSION = "0.4.5";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -120,7 +120,6 @@ void AddContentPaths() {
 struct GameInfo_t g_gameinfo;
 
 void ParseGameInfo() {
-    g_gameinfo.bSupportsXBox360 = false;
     g_gameinfo.bSupportsDX8 = true;
 }
 
@@ -671,8 +670,6 @@ void UsageAndExit() {
              "[-quiet] - operate silently\n"
              "[-r] - tag reversed\n"
              "[-t <texture>]\n"
-             "[-x360] - generate xbox360 output\n"
-             "[-nox360] - disable xbox360 output(default)\n"
              "[-fastbuild] - write a single vertex windings file\n"
              "[-nowarnings] - disable warnings\n"
              "[-dumpmaterials] - dump out material names\n"
