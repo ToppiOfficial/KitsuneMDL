@@ -2,7 +2,7 @@
 
 > **Experimental**
 
-A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs). Based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
+A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs).
 
 Primarily tested with `DMX model 18`. Older versions may still work.
 
@@ -10,13 +10,11 @@ Primarily tested with `DMX model 18`. Older versions may still work.
  
 | Game | Test Result |
 |---|---|
-| Garry's Mod | ✅ Fully supported |
-| Left 4 Dead 2 | ✅ Fully supported |
-| Half-Life 2 | 🟡 Partially tested (20th Anniversary version) |
+| Garry's Mod | ✅ Fully Supported |
+| Left 4 Dead 2 | ✅ Fully Supported |
+| Half-Life 2 | 🟡 Partially tested |
 | Counter-Strike: Source | ❌ Untested |
 | Team Fortress 2 | ❌ Untested |
-| Counter-Strike: Global Offensive (Legacy) | 🟡 Partially tested |
-| Alien Swarm | ❌ Untested |
 | Source Filmmaker | 🟡 Partially tested |
 | Portal 1 & 2 | ❌ Untested |
 
@@ -36,7 +34,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 
 - 64-bit, no external dependencies
 - Increased limits:
-  - Bone limit: 256 -> 1024
+  - Bone limit: 256 -> 1024 (Default cap is 256, see `wiki $modelbudget`)
   - Texture limit: 32 -> 96
   - Flex vertices limit: 10000 -> 32768
   - Mesh vertices limit: 21845 -> 174762 (overall model mesh limit: 65536 -> 524288)
@@ -58,27 +56,26 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 - New `$driverbone` and `driverlookat` commands to define procedural bones without VRD files
 - New `$rendermesh` to filter source geometry by DmeMesh object name or by material name; DmeMesh filtering requires DMX, `removematerial` works on any source format
 - New `$if`, `$elif`, `$else`, and `$switch` conditional commands
-- New `$staticproppose <animation_file> <frame>` to bake a custom pose into a `static_prop`'s geometry skeleton. Cannot be combined with `$staticprop`. **(Work in progress - does not behave as expected)**
+- New `$staticproppose`to bake a custom pose into a `static_prop`'s geometry skeleton. Cannot be used together with `$staticprop`.
 - New `$return <optional message>` to halt compilation with an optional message (similar to `$qcassert`)
-- New `$break <optional message>` to stop reading the QC at that point while still compiling whatever was parsed so far (unlike `$return`, which aborts without compiling)
+- New `$break` to stop reading the QC at that point while still compiling whatever was parsed so far (unlike `$return`, which aborts without compiling)
 - New `$print <message>` for compile-time output
-- New `$deltaproportions` to generate `a_reference` and `a_proportions`. See `docs/deltaproportions.md`
+- New `$deltaproportions` to generate `a_reference` and `a_proportions`. See `wiki deltaproportions`
 - New `$include` inline options:
   - `iffileexist` - silently skips the include if the file does not exist
   - `nofallbackdir` - disables the `-includedir` fallback for this include
-- `$model` can now be used inside `$bodygroup` blocks, enabling named variants with per-variant sub-options (eyeball, flex, etc.). See `docs/bodygroup-model.md`
-- Recreated features from StudioMDL++ and NekoMDL:
-  - `-cullanims` flag to strip unreferenced `$animation` blocks
-  - `-cullmorphs` flag to strip flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth (dead vertex-animation data)
-  - Bone weight cull threshold reduced from 5% to 0.01%
-  - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, VTA flex deltas, and `$eyeposition`
-  - `$renamebone` now propagates to the collision model
-  - Fixed crash with blank bodygroup combined with `$staticprop`
+- `$model` can now be used inside `$bodygroup` blocks, enabling named variants with per-variant sub-options (eyeball, flex, etc.). See `wiki bodygroup-model`
+- `-cullmorphs` flag to strip flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth (dead vertex-animation data)
+- `-cullanims` flag to strip unreferenced `$animation` blocks
+- Bone weight cull threshold reduced from 5% to 0.01%
+- `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, VTA flex deltas, and `$eyeposition`
+- `$renamebone` now propagates to the collision model
+- Fixed crash with blank bodygroup combined with `$staticprop`
 
 
 ## Credits
 
 - Valve - Source Engine and SDK
-- [REDxEYE](https://github.com/REDxEYE) - base fork
+- [REDxEYE](https://github.com/REDxEYE) - base fork [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2)
 - [ficool2](https://github.com/ficool2) - StudioMDL++ (Ideas based on the features their studiomdl version provided)
-- [Starfelll](https://github.com/Starfelll) - NekoMDL
+- [Starfelll](https://github.com/Starfelll) - NekoMDL (Ideas based on the features their studiomdl version provided)
