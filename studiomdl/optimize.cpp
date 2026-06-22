@@ -234,10 +234,8 @@ namespace OptimizedModel {
     };
 
     struct Mesh_t {
-        CUtlVector<StripGroup_t> stripGroups;
-        // Default to 0 so meshes culled at a LOD (which skip ComputeMeshFlags via the
-        // MeshNeedsRemoval continue in BuildModelLODs) never carry garbage flag bytes.
-        unsigned int flags = 0; // wtf?
+         CUtlVector<StripGroup_t> stripGroups;
+         unsigned int flags;
     };
 
     struct ModelLOD_t {
