@@ -1,0 +1,65 @@
+name: Preview
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (x64 Release)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (CMake preset x64-release)
+        run: cmake --preset x64-release
+
+      - name: Build
+        run: cmake --build --preset x64-release
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $exe = "out/build/x64-release/pulsemdl.exe"
+          if (-not (Test-Path $exe)) { throw "pulsemdl.exe was not produced" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $exe dist/
+          Copy-Item README.md dist/ -ErrorAction SilentlyContinue
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath "pulsemdl-preview-win64.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsemdl-preview-win64
+          path: pulsemdl-preview-win64.zip
+          if-no-files-found: error
+
+      - name: Move rolling preview tag
+        shell: pwsh
+        run: |
+          git tag -f preview
+          git push origin preview --force
+
+      - name: Publish preview pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview
+          name: "PulseMDL Preview (latest)"
+          prerelease: true
+          body: "Rolling preview build from commit ${{ github.sha }}. This release is overwritten on every preview run; do not rely on this link for stable downloads."
+          files: |
+            pulsemdl-preview-win64.zip
+            out/build/x64-release/pulsemdl.exe
