@@ -572,22 +572,6 @@ void Cmd_Bodygroup() {
             Option_Studio(g_model[g_nummodels]);
 
             // Body command should add any flex commands in the source loaded
-            PostProcessSource(g_model[g_nummodels]->source, g_nummodels);
-
-            g_nummodels++;
-        } else if (stricmp("blank", token) == 0) {
-            Option_Blank();
-        } else if (stricmp("$model", token) == 0) {
-            if (!GetToken(false))
-                MdlError("$model inside $bodygroup: expected model name\n");
-            g_model[g_nummodels] = (s_model_t *) calloc(1, sizeof(s_model_t));
-            strcpyn(g_model[g_nummodels]->name, token);
-
-            g_bodypart[g_numbodyparts].pmodel[g_bodypart[g_numbodyparts].nummodels] = g_model[g_nummodels];
-            g_bodypart[g_numbodyparts].nummodels++;
-
-            Option_Studio(g_model[g_nummodels]);
-
             if (g_model[g_nummodels]->source) {
                 AddBodyFlexData(g_model[g_nummodels]->source, g_nummodels);
                 AddBodyAttachments(g_model[g_nummodels]->source);
@@ -596,6 +580,8 @@ void Cmd_Bodygroup() {
             Option_Model(g_nummodels);
 
             g_nummodels++;
+        } else if (stricmp("blank", token) == 0) {
+            Option_Blank();
         } else {
             MdlError("unknown bodygroup option: \"%s\"\n", token);
         }

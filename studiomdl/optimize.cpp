@@ -234,8 +234,8 @@ namespace OptimizedModel {
     };
 
     struct Mesh_t {
-         CUtlVector<StripGroup_t> stripGroups;
-         unsigned int flags;
+        CUtlVector<StripGroup_t> stripGroups;
+        unsigned int flags;
     };
 
     struct ModelLOD_t {
