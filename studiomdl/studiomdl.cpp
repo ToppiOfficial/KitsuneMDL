@@ -542,58 +542,6 @@ void CClampedSource::Copy(s_source_t *pNewSource) {
     m_Animations.RemoveAll();
 }
 
-void CClampedSource::CopyFlexKeys(const s_source_t *pOrigSource, s_source_t *pNewSource, int imodel) {
-    // TODO: this produces many useless flex keys in HLMV, and it can fail if 'numSubmodels*numFlexKeys' exceeds the supported maximum
-    //       (this would happen for sure if a character's face got cut up, for example), so:
-    //  - in CClampedSource::AddAnimations, we can detect flex animations which do not apply to a submodel and cull them
-    //  - we would need to build up a mapping table from pre-culled indices to post-culled indices (and vice versa), so that in here we can copy just those
-    //    elements of m_FlexKeys/m_CombinationControls/m_CombinationRules/m_FlexControllerRemaps which were not culled (these arrays are all parallel)
-    //  - the copied m_CombinationRules values would need to be remapped using the mapping table
-    //  - if a flex key should be culled but it is referred to (via m_CombinationRules) by a non-culled flex key, then we can't cull it
-    // If characters are the only failure cases, a simpler alternative may be to just split models into flexed/unflexed parts (given only the faces are flexed)
-
-    if (pOrigSource == pNewSource)
-        return;
-
-// TODO: need to change g_defaultflexkey so it works with this (set a flag on the default flexkey (error if the user sets two defaults), duplicate the flag with that flexkey in here, update RemapVertexAnimations to use the flag)
-
-    pNewSource->m_FlexKeys.SetCount(pOrigSource->m_FlexKeys.Count());
-    for (int i = 0; i < pOrigSource->m_FlexKeys.Count(); i++) {
-        pNewSource->m_FlexKeys[i] = pOrigSource->m_FlexKeys[i];
-        // Only redirect source when the flex key uses the original body source (DMX).
-        // SMD flex keys may reference a separate file source - leave those intact.
-        if (pNewSource->m_FlexKeys[i].source == pOrigSource)
-            pNewSource->m_FlexKeys[i].source = pNewSource;
-    }
-    pNewSource->m_CombinationControls.SetCount(pOrigSource->m_CombinationControls.Count());
-    for (int i = 0; i < pOrigSource->m_CombinationControls.Count(); i++) {
-        pNewSource->m_CombinationControls[i] = pOrigSource->m_CombinationControls[i];
-    }
-    pNewSource->m_CombinationRules.SetCount(pOrigSource->m_CombinationRules.Count());
-    for (int i = 0; i < pOrigSource->m_CombinationRules.Count(); i++) {
-        pNewSource->m_CombinationRules[i] = pOrigSource->m_CombinationRules[i];
-    }
-    pNewSource->m_DmeFlexRules.SetCount(pOrigSource->m_DmeFlexRules.Count());
-    for (int i = 0; i < pOrigSource->m_DmeFlexRules.Count(); i++) {
-        pNewSource->m_DmeFlexRules[i] = pOrigSource->m_DmeFlexRules[i];
-    }
-    pNewSource->m_FlexControllerRemaps.SetCount(pOrigSource->m_FlexControllerRemaps.Count());
-    for (int i = 0; i < pOrigSource->m_FlexControllerRemaps.Count(); i++) {
-        pNewSource->m_FlexControllerRemaps[i] = pOrigSource->m_FlexControllerRemaps[i];
-    }
-
-    // Emulate post-processing of flex data done by Cmd_Bodygroup, via PostProcessSource:
-    //   Calling AddBodyFlexData will update:
-    //     - g_flexkey, g_numflexkeys, g_flexcontroller, g_numflexcontrollers, g_FlexControllerRemap
-    //     - pNewSource->( m_nKeyStartIndex, m_rawIndexToRemapSourceIndex, m_rawIndexToRemapLocalIndex, m_leftRemapIndexToGlobalFlexControllIndex, m_rightRemapIndexToGlobalFlexControllIndex )
-    //   Calling AddBodyFlexRules will update:
-    //     - pSource->m_FlexControllerRemaps
-    //     - g_flexrule, g_numflexrules
-    //   NOTE: we dont call AddBodyAttachments, since we're not duplicating those
-    AddBodyFlexData(pNewSource, imodel);
-    AddBodyFlexRules(pNewSource);
-}
-
 void CClampedSource::Init(int numvertices) {
     m_nOrigMap.EnsureCount(numvertices);
     for (int v = 0; v < numvertices; v++) {

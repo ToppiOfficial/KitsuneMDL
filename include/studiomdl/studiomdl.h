@@ -76,7 +76,6 @@ class CDmeCombinationOperator;
 //   budget param      hard cap #define          default soft value
 //   ------------      ----------------          ------------------
 //   totalverts        MAXSTUDIOVERTS            MAXSTUDIOVERTS
-//   bodyverts         MAXSTUDIOVERTS / 2        MAXSTUDIOVERTS / 3
 //   bones             MAXSTUDIOBONES (1024)     256
 //   materials         MAXSTUDIOSKINS (128)      64
 //   flexcontroller    MAXSTUDIOFLEXCTRL (256)   96
@@ -1500,9 +1499,9 @@ struct s_constraintboneslave_t {
 };
 
 //-----------------------------------------------------------------------------
-// Clamp meshes into N vertex sizes so as to not overrun
+// Accumulates faces/verts/animations from one or more sources into a single
+// source (used by AddSrcToSrc when merging static-prop bodies).
 //-----------------------------------------------------------------------------
-// TODO: It may be better to go ahead and create a new "source", since there's other limits besides just vertices per mesh, such as total verts per model.
 class CClampedSource {
 public:
     CClampedSource() : m_nummeshes(0) {};
@@ -1527,8 +1526,6 @@ public:
     void DestroyAnimations(s_source_t *pNewSource);
 
     void Copy(s_source_t *pOrigSource);
-
-    void CopyFlexKeys(const s_source_t *pOrigSource, s_source_t *pNewSource, int imodel);
 };
 
 //-----------------------------------------------------------------------------
@@ -2079,11 +2076,9 @@ struct StudioMdlContext {
     std::vector<CUtlString> AllowedActivityNames;
 
     // $modelbudget soft limits (hard caps = the #defines noted in []).
-    // maxVertexLimit/maxVertexClamp/maxBoneLimit keep their legacy names because
-    // existing code (ClampMaxVerticesPerModel, simplify.cpp bone check) reads them.
+    // maxBoneLimit keeps its legacy name because existing code
+    // (simplify.cpp bone check) reads it.
     int budgetTotalVerts      = MAXSTUDIOVERTS;          // [MAXSTUDIOVERTS]
-    int maxVertexLimit        = MAXSTUDIOVERTS / 3;      // bodyverts limit  [MAXSTUDIOVERTS/2]
-    int maxVertexClamp        = MAXSTUDIOVERTS / 3;      // bodyverts clamp  [MAXSTUDIOVERTS/2]
     int maxBoneLimit          = 256;                     // [MAXSTUDIOBONES = 1024]
     int budgetMaterials       = 64;                      // [MAXSTUDIOSKINS = 128]
     int budgetFlexControllers = 96;                      // [MAXSTUDIOFLEXCTRL = 256]

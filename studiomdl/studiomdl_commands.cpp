@@ -5264,14 +5264,6 @@ void Cmd_ModelBudget() {
             break;
         } else if (stricmp("totalverts", token) == 0) {
             g_StudioMdlContext.budgetTotalVerts = ReadBudgetValue(MAXSTUDIOVERTS);
-        } else if (stricmp("bodyverts", token) == 0) {
-            // first value: split limit; clamped to [1, MAXSTUDIOVERTS/2]
-            g_StudioMdlContext.maxVertexLimit = ReadBudgetValue(MAXSTUDIOVERTS / 2);
-            g_StudioMdlContext.maxVertexClamp = MIN(g_StudioMdlContext.maxVertexLimit, MAXSTUDIOVERTS / 2);
-            if (TokenAvailable()) {
-                // optional second value: explicit clamp
-                g_StudioMdlContext.maxVertexClamp = ReadBudgetValue(MAXSTUDIOVERTS / 2);
-            }
         } else if (stricmp("bones", token) == 0) {
             g_StudioMdlContext.maxBoneLimit = ReadBudgetValue(MAXSTUDIOBONES);
         } else if (stricmp("materials", token) == 0) {

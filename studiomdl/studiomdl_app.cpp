@@ -37,8 +37,6 @@ enum RunMode {
     RUN_MODE_STRIP_VHV
 } g_eRunMode = RUN_MODE_BUILD;
 
-class CClampedSource;
-
 static bool
 CStudioMDLApp_SuggestGameInfoDirFn(CFSSteamSetupInfo const *, char *pchPathBuffer, int nBufferLength,
                                    bool *pbBubbleDirectories) {
@@ -340,143 +338,6 @@ void CreateMakefile_OutputMakefile() {
     fprintf(fp, "\tmkdir \"%s\"\n", mkdirpath);
     fprintf(fp, "\t%s -quiet %s\n\n", CommandLine()->GetParm(0), g_fullpath);
     fclose(fp);
-}
-
-void ClampMaxVerticesPerModel(s_model_t *pOrigModel) {
-    s_source_t *pOrigSource = pOrigModel->source;
-    // check for overage
-    if (pOrigSource->numvertices < g_StudioMdlContext.maxVertexLimit)
-        return;
-
-    MdlWarning("model has too many verts, cutting into multiple models\n", pOrigSource->numvertices);
-
-    CUtlVector<CClampedSource> newSource;
-
-    int ns = newSource.AddToTail();
-    newSource[ns].Init(pOrigSource->numvertices);
-
-    for (int m = 0; m < pOrigSource->nummeshes; m++) {
-        s_mesh_t *pOrigMesh = &pOrigSource->mesh[m];
-
-        for (int f = pOrigMesh->faceoffset; f < pOrigMesh->faceoffset + pOrigMesh->numfaces; f++) {
-            // make sure all the total for all the meshes in the model don't go over limit
-            int nVertsInFace = (pOrigSource->face[f].d == 0) ? 3 : 4;
-            if ((newSource[ns].m_vertex.Count() + nVertsInFace) > g_StudioMdlContext.maxVertexClamp) {
-                // go to the next model
-                ns = newSource.AddToTail();
-                newSource[ns].Init(pOrigSource->numvertices);
-            }
-
-            // build face
-            s_face_t face;
-            face.a = newSource[ns].AddNewVert(pOrigSource, pOrigSource->face[f].a, m, m);
-            face.b = newSource[ns].AddNewVert(pOrigSource, pOrigSource->face[f].b, m, m);
-            face.c = newSource[ns].AddNewVert(pOrigSource, pOrigSource->face[f].c, m, m);
-            if (pOrigSource->face[f].d != 0)
-                face.d = newSource[ns].AddNewVert(pOrigSource, pOrigSource->face[f].d, m, m);
-            else
-                face.d = 0;
-
-            if (newSource[ns].m_mesh[m].numfaces == 0) {
-                newSource[ns].m_mesh[m].faceoffset = newSource[ns].m_face.Count();
-            }
-            newSource[ns].m_face.AddToTail(face);
-            newSource[ns].m_mesh[m].numfaces++;
-        }
-    }
-
-    // Split animations into the new sub-models
-    for (int n = 0; n < newSource.Count(); n++) {
-        newSource[n].AddAnimations(pOrigSource);
-        newSource[n].m_nummeshes = pOrigSource->nummeshes;
-    }
-
-    // Save mesh metadata before Copy() corrupts it: CClampedSource::m_meshindex[] is
-    // uninitialized, so Copy() writes garbage into pOrigSource->meshindex[].  All splits
-    // must use the original source's meshindex/texmap, not what Copy() leaves behind.
-    int savedMeshIndex[MAXSTUDIOSKINS];
-    int savedTexmap[MAXSTUDIOSKINS];
-    for (int i = 0; i < pOrigSource->nummeshes; i++) {
-        savedMeshIndex[i] = pOrigSource->meshindex[i];
-        savedTexmap[i]    = pOrigSource->texmap[i];
-    }
-
-    // copy over new meshes and animations back into initial source
-    free(pOrigSource->face);
-    free(pOrigSource->vertex);
-    newSource[0].Copy(pOrigSource);
-
-    // Restore meshindex/texmap that Copy() just clobbered with uninitialized data
-    for (int i = 0; i < pOrigSource->nummeshes; i++) {
-        pOrigSource->meshindex[i] = savedMeshIndex[i];
-        pOrigSource->texmap[i]    = savedTexmap[i];
-    }
-
-    for (int n = 1; n < newSource.Count(); n++) {
-        // create a new internal "source"
-        s_source_t *pSource = (s_source_t *) calloc(1, sizeof(s_source_t));
-        g_source[g_numsources++] = pSource;
-
-        // copy all the members, in order
-        memcpy(&(pSource->filename[0]), &(pOrigSource->filename[0]), sizeof(pSource->filename));
-
-        // copy over the faces/vertices/animations
-        newSource[n].Copy(pSource);
-
-        // copy settings
-        pSource->isActiveModel = true;
-
-        // copy skeleton
-        pSource->numbones = pOrigSource->numbones;
-        for (int i = 0; i < pSource->numbones; i++) {
-            pSource->localBone[i] = pOrigSource->localBone[i];
-            pSource->boneToPose[i] = pOrigSource->boneToPose[i];
-        }
-
-
-        // The following members are set up later on in the process, so we don't need to copy them here:
-        //   pSource->boneflags
-        //   pSource->boneref
-        //   pSource->boneLocalToGlobal
-        //   pSource->boneGlobalToLocal
-        //   pSource->m_GlobalVertices
-
-
-        // copy mesh data - use saved values; pOrigSource->meshindex is garbage after Copy()
-        for (int i = 0; i < pSource->nummeshes; i++) {
-            pSource->texmap[i]    = savedTexmap[i];
-            pSource->meshindex[i] = savedMeshIndex[i];
-        }
-
-        // copy settings
-        pSource->adjust = pOrigSource->adjust;
-        pSource->scale = pOrigSource->scale;
-        pSource->rotation = pOrigSource->rotation;
-        pSource->bNoAutoDMXRules = pOrigSource->bNoAutoDMXRules;
-
-        // allocate a model
-        s_model_t *pModel = (s_model_t *) calloc(1, sizeof(s_model_t));
-        pModel->source = pSource;
-        sprintf(pModel->name, "%s%d", "clamped", n);
-        // inherit filename and rendermesh alias so LOD replacement lookup works for split parts
-        Q_strncpy(pModel->filename, pOrigModel->filename, sizeof(pModel->filename));
-        Q_strncpy(pModel->rendermesh_name, pOrigModel->rendermesh_name, sizeof(pModel->rendermesh_name));
-        int imodel = g_nummodels++;
-        g_model[imodel] = pModel;
-
-        // make it a new bodypart
-        g_bodypart[g_numbodyparts].nummodels = 1;
-        g_bodypart[g_numbodyparts].base =
-                g_bodypart[g_numbodyparts - 1].base * g_bodypart[g_numbodyparts - 1].nummodels;
-        sprintf(g_bodypart[g_numbodyparts].name, "%s%d", "clamped", n);
-        g_bodypart[g_numbodyparts].pmodel[0] = pModel;
-        g_numbodyparts++;
-
-        // finally, copy flex keys
-        newSource[n].CopyFlexKeys(pOrigSource, pSource, imodel);
-
-        // NOTE: we leave attachments on the first sub-model, we don't want to duplicate those
-    }
 }
 
 void SetSkinValues() {
@@ -893,19 +754,6 @@ int CStudioMDLApp::Main() {
         for (int m = 0; m < g_nummodels; m++)
             if (g_model[m] && g_model[m]->source)
                 g_model[m]->source->isActiveModel = true;
-
-        // Iterate by model so split parts inherit filename/rendermesh_name for LOD lookup.
-        // Track visited sources to avoid double-clamping shared source pointers.
-        CUtlVector<s_source_t *> clampedSources;
-        int nModelsBeforeClamp = g_nummodels;
-        for (int m = 0; m < nModelsBeforeClamp; m++) {
-            if (!g_model[m] || !g_model[m]->source || !g_model[m]->source->isActiveModel)
-                continue;
-            if (clampedSources.Find(g_model[m]->source) != -1)
-                continue;
-            clampedSources.AddToTail(g_model[m]->source);
-            ClampMaxVerticesPerModel(g_model[m]);
-        }
 
         SetSkinValues();
 
