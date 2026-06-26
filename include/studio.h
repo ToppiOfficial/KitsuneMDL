@@ -62,15 +62,9 @@ Studio models are position independent, so the cache manager can move them.
 
 struct studiohdr_t;
 
-#ifdef _GAMECONSOLE
-#define MAXSTUDIOTRIANGLES	65536	// 
-#define MAXSTUDIOVERTS		32768	// These numbers save memory in CCachedRenderData, but restrict usable model sizes on 360
-#define	MAXSTUDIOFLEXVERTS	4096	// 
-#else
 #define MAXSTUDIOTRIANGLES	524288
 #define MAXSTUDIOVERTS		524288
 #define	MAXSTUDIOFLEXVERTS	65536  	// max number of verts that can be flexed per mesh.  TODO: tune this
-#endif
 #define MAXSTUDIOSKINS		128		// total textures
 #define MAXSTUDIOBONES		1024	// total bones actually used
 #define MAXSTUDIOFLEXDESC	4096	// maximum number of low level flexes (actual morph targets)
@@ -78,7 +72,6 @@ struct studiohdr_t;
 #define MAXSTUDIOPOSEPARAM	64
 #define MAXSTUDIOBONECTRLS	4
 #define MAXSTUDIOANIMBLOCKS 256
-
 #define MAXSTUDIOBONEBITS	10		// NOTE: MUST MATCH MAXSTUDIOBONES
 
 // NOTE!!! : Changing this number also changes the vtx file format!!!!!

@@ -12,7 +12,8 @@
 // NOTE: Would be nice to have a test case for this! - not verified in vs2005
 #pragma optimize( "g", off )
 
-// use this much memory to build an output file in memory.
+// Minimum (floor) size of the in-memory VTX build buffer. WriteVTXFile() scales
+// the actual allocation up to the exact computed file size for large models.
 #define FILEBUFFER_SIZE ( 4 * 1024 * 1024 )
 
 //#define IGNORE_BONES
@@ -2783,7 +2784,6 @@ namespace OptimizedModel {
                                        TotalMeshStats_t const &stats) {
 
         // calculate file offsets
-        m_FileBuffer = new CFileBuffer(FILEBUFFER_SIZE);
         m_BodyPartsOffset = sizeof(FileHeader_t);
         m_ModelsOffset = m_BodyPartsOffset + sizeof(BodyPartHeader_t) * stats.m_TotalBodyParts;
         m_ModelLODsOffset = m_ModelsOffset + sizeof(ModelHeader_t) * stats.m_TotalModels;
@@ -2808,6 +2808,20 @@ namespace OptimizedModel {
         m_EndOfFileOffset = g_bLegacyVTX
             ? m_TopologyOffset
             : m_TopologyOffset + sizeof(unsigned short) * stats.m_TotalTopologyIndices;
+
+        // Size the in-memory build buffer to the exact computed file size (with a
+        // small safety margin so the debug Append() bounds Assert, which uses a
+        // strict '<', stays happy), but never below FILEBUFFER_SIZE. The stock
+        // fixed 4MB buffer overflows and crashes the VTX write on very large /
+        // high-poly models, so we scale up automatically when needed.
+        int fileBufferSize = m_EndOfFileOffset + (64 * 1024);
+        if (fileBufferSize < FILEBUFFER_SIZE) {
+            fileBufferSize = FILEBUFFER_SIZE;
+        } else if (!g_StudioMdlContext.quiet) {
+            printf("Model is very large! switching to %d MB VTX buffer\n",
+                   (fileBufferSize + (1024 * 1024 - 1)) / (1024 * 1024));
+        }
+        m_FileBuffer = new CFileBuffer(fileBufferSize);
 
         int curModel = 0;
         int curLOD = 0;

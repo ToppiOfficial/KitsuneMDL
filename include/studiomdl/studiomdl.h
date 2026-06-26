@@ -33,6 +33,7 @@ struct s_flexcontroller_t;
 struct s_flexcontrollerremap_t;
 struct s_combinationrule_t;
 struct s_combinationcontrol_t;
+struct s_dmeflexrule_t;
 
 class CDmeVertexDeltaData;
 
@@ -1105,6 +1106,12 @@ struct s_source_t {
     // Combination rules stored in the source data
     CUtlVector<s_combinationrule_t> m_CombinationRules;
 
+    // DMX flex rules (expression / passthrough / localvar) captured from the source.
+    // Only populated for $rendermesh raw loads, where global flex registration is deferred
+    // to the per-source path so the (possibly filtered) clone re-emits exactly what it keeps.
+    // Replayed by AddBodyFlexRules; empty for normal loads (those register rules directly).
+    CUtlVector<s_dmeflexrule_t> m_DmeFlexRules;
+
     // Flexcontroller remaps
     CUtlVector<s_flexcontrollerremap_t> m_FlexControllerRemaps;
 
@@ -1133,6 +1140,19 @@ EXTERN int g_nStaticPropPoseFrame;
 // true only while Load_Source() is loading a $staticproppose pose file; suppresses
 // non-geometry side effects (jigglebones, constraints) that would otherwise leak into the model
 EXTERN bool g_bLoadingStaticPropPose;
+
+// true only while loading the underlying source of a $rendermesh. Per-source flex data
+// (m_FlexKeys, m_CombinationControls/Rules, m_FlexControllerRemaps, m_DmeFlexRules) is still
+// built, but the *global* flex registration (g_flexcontroller/g_flexdesc/g_flexrule) done by
+// AddCombination is skipped. Each $rendermesh clone instead registers its own (filtered) flex
+// through PostProcessSource, so a nofacial / mesh-filtered clone contributes exactly the flex
+// it keeps and an unfiltered facial clone contributes the full set - the unfiltered raw never
+// leaks.
+//
+// DMX flex rules (CDmeFlexRuleExpression / passthrough / localvar) are captured verbatim into
+// m_DmeFlexRules during this raw load and replayed by AddBodyFlexRules, so a $rendermesh clone
+// is a faithful copy of all the DMX's flex data (nofacial drops them again like everything else).
+EXTERN bool g_bLoadingRenderMeshRaw;
 
 struct s_staticPropPoseFlexOverride_t {
     char name[MAXSTUDIONAME];
@@ -1218,6 +1238,12 @@ struct s_flexcontrollerremap_t {
     CUtlString m_FlexGroup;             // flex controller type/group; empty means use m_Name
     FlexControllerRemapType_t m_RemapType;
     bool m_bIsStereo;
+    // DMX-supplied flex controller range (flexMin/flexMax). m_bHasMinMax is true only when the
+    // source explicitly specified them; used by AddFlexControllers so a $rendermesh clone keeps
+    // the DMX's range instead of the synthesized 0..1 / -1..1 default. See BuildCombinationSourceData.
+    bool m_bHasMinMax = false;
+    float m_flMin = 0.0f;
+    float m_flMax = 1.0f;
     std::vector<CUtlString> m_RawControls;
     int m_Index;        ///< The model relative index of the slider control for value for this if it's not split, -1 otherwise
     int m_LeftIndex;    ///< The model relative index of the left slider control for this if it's split, -1 otherwise
@@ -1287,6 +1313,14 @@ struct s_combinationrule_t {
     // The index into the flexkeys to put the result in
     // (should affect both left + right if the key is sided)
     int m_nFlex;
+};
+
+// A single DMX flex rule captured from a CDmeFlexRules block, prepared for replay through
+// the QC flex-rule parser (Option_Flexrule). See s_source_t::m_DmeFlexRules.
+struct s_dmeflexrule_t {
+    CUtlString m_Name;      // rule (flexdesc) name
+    CUtlString m_Script;    // "= <expr>" memory script, $var$ tokens already expanded
+    bool m_bEmit;           // true: emit via Option_Flexrule; false: localvar (reserve flexdesc only)
 };
 
 EXTERN    Vector g_defaultadjust;

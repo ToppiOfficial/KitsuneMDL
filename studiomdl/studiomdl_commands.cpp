@@ -62,6 +62,7 @@ static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString>
 static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 static void ApplyNoFacialFilter(s_source_t *pSource);
 static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
+static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse);
 
 //-----------------------------------------------------------------------------
 // Parse contents flags
@@ -195,16 +196,7 @@ void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale
     if (!pRenderMeshDef) {
         pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true);
     } else {
-        if (!pRenderMeshDef->pOwnedSource) {
-            // First use of this def: load raw from cache (read-only), clone it immediately
-            // so the cache is never mutated, then process and filter on the private copy.
-            s_source_t *pRaw = Load_Source(pmodel->filename, "", bFlipTriangles, true);
-            if (pRaw) {
-                s_source_t *pOwned = CloneSourceGeometry(pRaw);
-                ApplyRenderMeshFilter(pOwned, pRenderMeshDef);
-                pRenderMeshDef->pOwnedSource = pOwned;
-            }
-        }
+        EnsureRenderMeshOwnedSource(pRenderMeshDef, bFlipTriangles);
         // Each model use gets its own clone of the pre-processed owned source.
         pmodel->source = pRenderMeshDef->pOwnedSource
             ? CloneSourceGeometry(pRenderMeshDef->pOwnedSource)
@@ -838,7 +830,13 @@ void AddFlexControllers(
                     pController = &g_flexcontroller[g_numflexcontrollers++];
                     Q_strncpy(pController->name, pTemp, sizeof(pController->name));
                     Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
-                    if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
+                    if (remapControl.m_bHasMinMax) {
+                        // Preserve the DMX-specified range (e.g. eyes_look_up_down -22..22).
+                        // The normal $body path sets this via FindOrAddFlexController; the
+                        // per-source path must do the same so $rendermesh clones match.
+                        pController->min = remapControl.m_flMin;
+                        pController->max = remapControl.m_flMax;
+                    } else if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
                         remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
                         pController->min = -1.0f;
                         pController->max = 1.0f;
@@ -868,7 +866,13 @@ void AddFlexControllers(
                     pController = &g_flexcontroller[g_numflexcontrollers++];
                     Q_strncpy(pController->name, pTemp, sizeof(pController->name));
                     Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
-                    if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
+                    if (remapControl.m_bHasMinMax) {
+                        // Preserve the DMX-specified range (e.g. eyes_look_up_down -22..22).
+                        // The normal $body path sets this via FindOrAddFlexController; the
+                        // per-source path must do the same so $rendermesh clones match.
+                        pController->min = remapControl.m_flMin;
+                        pController->max = remapControl.m_flMax;
+                    } else if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
                         remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
                         pController->min = -1.0f;
                         pController->max = 1.0f;
@@ -902,7 +906,13 @@ void AddFlexControllers(
                     Q_strncpy(pController->name, remapControl.m_Name.Get(), sizeof(pController->name));
                     Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? remapControl.m_Name.Get() : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
 
-                    if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
+                    if (remapControl.m_bHasMinMax) {
+                        // Preserve the DMX-specified range (e.g. eyes_look_up_down -22..22).
+                        // The normal $body path sets this via FindOrAddFlexController; the
+                        // per-source path must do the same so $rendermesh clones match.
+                        pController->min = remapControl.m_flMin;
+                        pController->max = remapControl.m_flMax;
+                    } else if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
                         remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
                         pController->min = -1.0f;
                         pController->max = 1.0f;
@@ -2169,6 +2179,38 @@ void AddBodyFlexRule(
 }
 
 
+// Defined in scriplib; declared again here because AddBodyFlexRules replays captured
+// $rendermesh DMX flex rules through the QC flex-rule parser.
+void PushMemoryScript(char *pszBuffer, const int nSize);
+bool PopMemoryScript();
+
+// Replays the DMX flex rules captured from a $rendermesh raw load (see s_source_t::
+// m_DmeFlexRules / AddCombination). Empty for normal loads, so this is a no-op there.
+// nofacial clears m_DmeFlexRules, so a nofacial clone replays nothing.
+static void ReplayDmeFlexRules(s_source_t *pSource) {
+    const int nCount = pSource->m_DmeFlexRules.Count();
+    if (nCount == 0)
+        return;
+
+    // Pass 1: register every rule's flexdesc first so %cross-references between rules
+    // (e.g. %otherRule, localvars) resolve when the expressions are parsed below.
+    for (int i = 0; i < nCount; ++i)
+        Add_Flexdesc(pSource->m_DmeFlexRules[i].m_Name.Get());
+
+    // Pass 2: emit the expression/passthrough rules. PushMemoryScript needs a mutable
+    // buffer, so feed a copy.
+    for (int i = 0; i < nCount; ++i) {
+        s_dmeflexrule_t &rule = pSource->m_DmeFlexRules[i];
+        if (!rule.m_bEmit)
+            continue;    // localvar: flexdesc reserved above, no rule to emit
+
+        CUtlString sScript = rule.m_Script;
+        PushMemoryScript(sScript.Get(), sScript.Length());
+        Option_Flexrule(NULL, rule.m_Name.Get());
+        PopMemoryScript();
+    }
+}
+
 void AddBodyFlexRules(s_source_t *pSource) {
     const int nRemapCount = pSource->m_FlexControllerRemaps.Count();
     for (int i = 0; i < nRemapCount; ++i) {
@@ -2197,6 +2239,10 @@ void AddBodyFlexRules(s_source_t *pSource) {
                             pSource->m_rightRemapIndexToGlobalFlexControllIndex);
         }
     }
+
+    // Replay any DMX expression/passthrough/localvar flex rules captured from a
+    // $rendermesh raw load (no-op for normal loads).
+    ReplayDmeFlexRules(pSource);
 }
 
 void Option_Eyelid(int imodel) {
@@ -3248,14 +3294,7 @@ static void Cmd_ReplaceModel(LodScriptData_t &lodData) {
     if (!lodData.IsStrippedFromModel()) {
         s_rendermesh_def_t *pDstRmDef = FindRenderMeshDef(newReplacement.GetDstName());
         if (pDstRmDef) {
-            if (!pDstRmDef->pOwnedSource) {
-                s_source_t *pRaw = Load_Source(pDstRmDef->filename, "", reverse, false);
-                if (pRaw) {
-                    s_source_t *pOwned = CloneSourceGeometry(pRaw);
-                    ApplyRenderMeshFilter(pOwned, pDstRmDef);
-                    pDstRmDef->pOwnedSource = pOwned;
-                }
-            }
+            EnsureRenderMeshOwnedSource(pDstRmDef, reverse);
             newReplacement.m_pSource = pDstRmDef->pOwnedSource
                 ? CloneSourceGeometry(pDstRmDef->pOwnedSource)
                 : nullptr;
@@ -7659,6 +7698,10 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
     pClone->m_CombinationRules.SetCount(pOrig->m_CombinationRules.Count());
     for (int i = 0; i < pOrig->m_CombinationRules.Count(); i++)
         pClone->m_CombinationRules[i] = pOrig->m_CombinationRules[i];
+    memset(&pClone->m_DmeFlexRules, 0, sizeof(pClone->m_DmeFlexRules));
+    pClone->m_DmeFlexRules.SetCount(pOrig->m_DmeFlexRules.Count());
+    for (int i = 0; i < pOrig->m_DmeFlexRules.Count(); i++)
+        pClone->m_DmeFlexRules[i] = pOrig->m_DmeFlexRules[i];
     memset(&pClone->m_FlexControllerRemaps, 0, sizeof(pClone->m_FlexControllerRemaps));
     pClone->m_FlexControllerRemaps.SetCount(pOrig->m_FlexControllerRemaps.Count());
     for (int i = 0; i < pOrig->m_FlexControllerRemaps.Count(); i++)
@@ -7900,6 +7943,7 @@ static void ApplyNoFacialFilter(s_source_t *pSource) {
     pSource->m_CombinationControls.RemoveAll();
     pSource->m_CombinationRules.RemoveAll();
     pSource->m_FlexControllerRemaps.RemoveAll();
+    pSource->m_DmeFlexRules.RemoveAll();
     pSource->bNoAutoDMXRules = true;
 
     // Free and drop the vertex-animation deltas. The clone owns its vanim[] buffers
@@ -8058,20 +8102,30 @@ void ReportUnusedRenderMeshDefs() {
 // owned source on first use, exactly like ProcessOptionStudio does for $body.
 // Returns the shared owned source (do NOT free it); NULL if the name is unknown.
 //-----------------------------------------------------------------------------
+// Lazily loads, clones, and filters the underlying source for a $rendermesh definition,
+// caching the result in pDef->pOwnedSource. The raw source is always cloned immediately so
+// the underlying file's data is never mutated.
+static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse) {
+    if (pDef->pOwnedSource)
+        return;
+
+    g_bLoadingRenderMeshRaw = true;
+    s_source_t *pRaw = Load_Source(pDef->filename, "", reverse, true);
+    g_bLoadingRenderMeshRaw = false;
+
+    if (pRaw) {
+        s_source_t *pOwned = CloneSourceGeometry(pRaw);
+        ApplyRenderMeshFilter(pOwned, pDef);
+        pDef->pOwnedSource = pOwned;
+    }
+}
+
 s_source_t *GetRenderMeshSource(const char *name) {
     s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
     if (!pDef)
         return nullptr;
 
-    if (!pDef->pOwnedSource) {
-        s_source_t *pRaw = Load_Source(pDef->filename, "", false, true);
-        if (pRaw) {
-            s_source_t *pOwned = CloneSourceGeometry(pRaw);
-            ApplyRenderMeshFilter(pOwned, pDef);
-            pDef->pOwnedSource = pOwned;
-        }
-    }
-
+    EnsureRenderMeshOwnedSource(pDef, false);
     pDef->used = true;
     return pDef->pOwnedSource;
 }
@@ -9085,6 +9139,7 @@ MDLCommand_t g_Commands[] =
                 {"$return",                           Cmd_Return,},
                 {"$break",                            Cmd_Break,},
                 {"$print",                            Cmd_Print,},
+                {"$msg",                            Cmd_Print,},
         };
 
 int g_nMDLCommandCount = ARRAYSIZE(g_Commands);
