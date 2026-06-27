@@ -3930,7 +3930,7 @@ namespace OptimizedModel {
         // hack!  This should really go in the mdl file since it's common to all LODs.
         AddMaterialReplacementsToStringTable();
 
-        strcpy(filename, gamedir);
+        strcpy(filename, GetModelOutputDir());
         //	if( *g_pPlatformName )
         //	{
         //		strcat( filename, "platform_" );

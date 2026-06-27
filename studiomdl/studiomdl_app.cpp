@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.4.8";
+static const char *PULSE_MDL_VERSION = "0.4.9";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -313,7 +313,7 @@ void CreateMakefile_OutputMakefile() {
         MdlError("can't open makefile.tmp!\n");
     }
     char mdlname[MAX_PATH];
-    strcpy(mdlname, gamedir);
+    strcpy(mdlname, GetModelOutputDir());
 //	if( *g_pPlatformName )
 //	{
 //		strcat( mdlname, "platform_" );
@@ -521,6 +521,7 @@ void UsageAndExit() {
              "[-f] - flip all triangles\n"
              "[-fullcollide] - don't truncate really big collisionmodels\n"
              "[-game <gamedir>] - optional; if omitted, output is written next to the .qc\n"
+             "[-outputdir <dir>] - redirect compiled output (still honors models/ and $modelname); absolute, or relative to the .qc dir\n"
              "[-h] - dump hboxes\n"
              "[-i] - ignore warnings\n"
              "[-minlod <lod>] - truncate to highest detail <lod>\n"
@@ -555,7 +556,6 @@ void UsageAndExit() {
              "[-includedir <dir>] (repeatable, fallback search path for $include)\n"
              "[-basedir]\n"
              "[-tempcontent]\n"
-             "[-nop4]\n"
              "[-vtxformat <int>] - VTX format: 0 = TF2/L4D2 (default), 1 = Alien Swarm/CS:GO\n"
              "[-nodx80] - skip dx80.vtx and sw.vtx output\n"
              "[-cullanims] - remove unreferenced $animations to reduce file size\n"
@@ -775,7 +775,7 @@ int CStudioMDLApp::Main() {
     if (g_StudioMdlContext.createMakefile) {
         CreateMakefile_OutputMakefile();
     } else if (g_StudioMdlContext.bMakeVsi) {
-        Q_snprintf(g_StudioMdlContext.g_path, ARRAYSIZE(g_StudioMdlContext.g_path), "%smodels/%s", gamedir, g_outname);
+        Q_snprintf(g_StudioMdlContext.g_path, ARRAYSIZE(g_StudioMdlContext.g_path), "%smodels/%s", GetModelOutputDir(), g_outname);
         Main_MakeVsi();
     }
 
@@ -887,6 +887,20 @@ bool CStudioMDLApp::PreInit() {
         if (!g_StudioMdlContext.quiet)
             printf("No -game specified; writing output next to the .qc (\"%s\").\n", gamedir);
     }
+
+    // -outputdir redirects where the compiled .mdl/.vvd/.vtx/.phy are written,
+    // while still honoring the "models/" prefix and $modelname. The path may be
+    // absolute, or relative to the .qc's directory (qdir).
+    const char *pOutputDir = CommandLine()->ParmValue("-outputdir", (const char *)NULL);
+    if (pOutputDir && pOutputDir[0]) {
+        Q_MakeAbsolutePath(g_OutputDir, sizeof(g_OutputDir), pOutputDir, qdir);
+        Q_AppendSlash(g_OutputDir, sizeof(g_OutputDir));
+        Q_FixSlashes(g_OutputDir);
+
+        if (!g_StudioMdlContext.quiet)
+            printf("Output directory overridden by -outputdir (\"%s\").\n", g_OutputDir);
+    }
+
     return true;
 }
 

@@ -2237,7 +2237,7 @@ void CollisionModel_Write( long checkSum )
 	CPhysCollisionModel *pPhys = g_JointedModel.m_pCollisionList;
 
 	char filename[512];
-	strcpy( filename, gamedir );
+	strcpy( filename, GetModelOutputDir() );
 	strcat( filename, "models/" );
 	strcat( filename, g_JointedModel.m_pOverrideName ? g_JointedModel.m_pOverrideName : g_outname );
 

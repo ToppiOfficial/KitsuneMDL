@@ -50,7 +50,18 @@ CSysModule			*g_pFullFileSystemModule = NULL;
 char		qdir[1024];
 
 // This is the base engine + mod-specific game dir (e.g. "c:\tf2\mytfmod\")
-char		gamedir[1024];	
+char		gamedir[1024];
+
+// Optional output override (set by -outputdir). When non-empty, compiled
+// models are written here instead of under gamedir. Includes a trailing slash.
+char		g_OutputDir[1024] = { 0 };
+
+// Returns the base directory that compiled model files ("models/...") are
+// written to: the -outputdir override when set, otherwise gamedir.
+const char *GetModelOutputDir()
+{
+	return g_OutputDir[0] ? g_OutputDir : gamedir;
+}
 
 void FileSystem_SetupStandardDirectories( const char *pFilename, const char *pGameInfoPath )
 {

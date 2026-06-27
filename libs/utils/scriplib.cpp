@@ -399,14 +399,16 @@ static void ScripBuf_Steal(ScripBuf* dst, ScripBuf* src) {
 
 typedef struct {
     char toks[MAX_CONDITIONAL_TOKENS][MAXTOKEN];
+    bool isLiteral[MAX_CONDITIONAL_TOKENS];
     int  count;
 } CondToks;
 
 static void CondToks_Init(CondToks* c) { c->count = 0; }
 
-static void CondToks_Push(CondToks* c, const char* tok) {
+static void CondToks_Push(CondToks* c, const char* tok, bool isLiteral) {
     if (c->count >= MAX_CONDITIONAL_TOKENS)
         Error("$if: too many tokens in condition (max %d)\n", MAX_CONDITIONAL_TOKENS);
+    c->isLiteral[c->count] = isLiteral;
     V_strncpy(c->toks[c->count++], tok, MAXTOKEN);
 }
 
@@ -459,9 +461,15 @@ static void CollectBlockContentRaw(ScripBuf* out) {
 static void PushConditionalBlock(ScripBuf* content, int startLine) {
     if (ScripBuf_Empty(content)) return;
     if (script == nullptr) script = scriptstack;
+    script_t* parent = script;
     script++;
     if (script == &scriptstack[MAX_INCLUDES])
         Error("script file exceeded MAX_INCLUDES");
+    script->nummacroparams = parent->nummacroparams;
+    for (int i = 0; i < parent->nummacroparams; i++) {
+        script->macroparam[i] = parent->macroparam[i];
+        script->macrovalue[i] = parent->macrovalue[i];
+    }
     int sz = content->len;
     char* buf = (char*)malloc(sz + 2);
     if (!buf) Error("PushConditionalBlock: out of memory\n");
@@ -547,7 +555,7 @@ static bool ce_evalAtom(CondEval* e, char* outBuf, int outBufSize) {
         char inner[MAXTOKEN]; inner[0] = '\0';
         if (ilen > 0 && ilen < MAXTOKEN) { memcpy(inner, t+4, ilen); inner[ilen] = '\0'; }
         CondToks subct; CondToks_Init(&subct);
-        V_strncpy(subct.toks[0], inner, MAXTOKEN); subct.count = 1;
+        V_strncpy(subct.toks[0], inner, MAXTOKEN); subct.isLiteral[0] = false; subct.count = 1;
         CondEval sub; sub.ct = &subct; sub.pos = 0;
         char tmp[MAXTOKEN]; tmp[0] = '\0';
         bool r = ce_evalAtom(&sub, tmp, sizeof(tmp));
@@ -556,7 +564,21 @@ static bool ce_evalAtom(CondEval* e, char* outBuf, int outBufSize) {
         return neg;
     }
 
+    bool literal = e->ct->isLiteral[e->pos];
     e->pos++;
+    // A quoted/$var$-expanded operand, or anything numeric, is a literal value.
+    // Any other bare operand is a variable reference and must be defined.
+    if (!literal && !s_isNumericStr(t)) {
+        const char* v = LookupVariableValue(t);
+        if (!v) {
+            Error("$if: undefined variable '%s' in condition "
+                  "(quote string literals as \"%s\", or test with None(%s))\n", t, t, t);
+            outBuf[0] = '\0';
+            return false;
+        }
+        V_strncpy(outBuf, v, outBufSize);
+        return s_isTruthy(v);
+    }
     V_strncpy(outBuf, t, outBufSize);
     return s_isTruthy(t);
 }
@@ -614,15 +636,54 @@ static void s_peekRawWord(char* buf, int bufSize) {
     buf[len] = '\0';
 }
 
-// Read condition tokens via GetToken until '{' (which is consumed).
-static bool s_readConditionTokens(CondToks* toks) {
-    while (GetToken(true)) {
-        if (!stricmp(token, "{")) return true;
-        if (endofscript) { Error("$if: missing '{'\n"); return false; }
-        CondToks_Push(toks, token);
+// Skip whitespace/comments/newlines from script_p and return the next
+// significant character (0 at end of script), leaving script_p positioned at it
+// so a following GetToken reads it directly.
+static char s_peekSignificant() {
+    const char* p   = script->script_p;
+    const char* end = script->end_p;
+    while (p < end) {
+        char c = *p;
+        if (c == '\n') { script->line++; scriptline = script->line; p++; continue; }
+        if ((unsigned char)c <= ' ') { p++; continue; }
+        if ((c == '/' && p + 1 < end && p[1] == '/') || c == '#' || c == ';') {
+            while (p < end && *p != '\n') p++;
+            continue;
+        }
+        if (c == '/' && p + 1 < end && p[1] == '*') {
+            p += 2;
+            while (p + 1 < end && !(*p == '*' && p[1] == '/')) {
+                if (*p == '\n') { script->line++; scriptline = script->line; }
+                p++;
+            }
+            if (p + 1 < end) p += 2;
+            continue;
+        }
+        break;
     }
-    Error("$if: missing '{'\n");
-    return false;
+    script->script_p = (char*)p;
+    return (p < end) ? *p : 0;
+}
+
+// Consume the '{' that opens a directive body, or error with the given context.
+static void s_expectBrace(const char* ctx) {
+    if (s_peekSignificant() != '{') { Error("%s: expected '{'\n", ctx); return; }
+    script->script_p++;
+}
+
+// Read a condition (the tokens up to the opening '{', which is consumed) into
+// `toks`, tagging each token literal/non-literal. A token is literal when it
+// begins with '"' (quoted string) or '$' (a $var$ expansion); bare words are
+// resolved as variable references by the evaluator.
+static void s_readCondition(CondToks* toks) {
+    while (true) {
+        char c = s_peekSignificant();
+        if (c == 0)   { Error("$if: missing '{'\n"); return; }
+        if (c == '{') { script->script_p++; return; }   // consume '{'
+        bool isLit = (c == '"' || c == '$');
+        GetToken(true);                                  // expands $var$, strips quotes
+        CondToks_Push(toks, token, isLit);
+    }
 }
 
 static bool s_evalConditionTokens(CondToks* toks) {
@@ -632,6 +693,14 @@ static bool s_evalConditionTokens(CondToks* toks) {
     if (ev.pos < ev.ct->count)
         Error("$if: unexpected token '%s' in condition\n", ev.ct->toks[ev.pos]);
     return result;
+}
+
+// Read one clause header of an $if chain (the condition tokens up to the opening
+// '{', which is consumed) and return whether the condition is true.
+static bool s_readIfClause() {
+    CondToks toks; CondToks_Init(&toks);
+    s_readCondition(&toks);
+    return s_evalConditionTokens(&toks);
 }
 
 static void ProcessIfDirective() {
@@ -646,9 +715,7 @@ static void ProcessIfDirective() {
     int elifCount = 0;
 
     {
-        CondToks toks; CondToks_Init(&toks);
-        if (!s_readConditionTokens(&toks)) { --s_conditionalDepth; return; }
-        bool cond = s_evalConditionTokens(&toks);
+        bool cond = s_readIfClause();
         int bline = scriptline;
         ScripBuf block; ScripBuf_Init(&block);
         CollectBlockContentRaw(&block);
@@ -666,9 +733,7 @@ static void ProcessIfDirective() {
             GetToken(true); // consume the $elif token
             if (++elifCount > MAX_CONDITIONAL_ELIF)
                 Error("$if: maximum $elif count (%d) exceeded\n", MAX_CONDITIONAL_ELIF);
-            CondToks toks; CondToks_Init(&toks);
-            if (!s_readConditionTokens(&toks)) break;
-            bool cond = s_evalConditionTokens(&toks);
+            bool cond = s_readIfClause();
             int bline = scriptline;
             ScripBuf block; ScripBuf_Init(&block);
             CollectBlockContentRaw(&block);
@@ -676,8 +741,7 @@ static void ProcessIfDirective() {
             ScripBuf_Free(&block);
         } else if (!Q_stricmp(peeked, "$else")) {
             GetToken(true); // consume the $else token
-            GetToken(true); // consume '{'
-            if (stricmp("{", token) != 0) { Error("$else: expected '{'\n"); break; }
+            s_expectBrace("$else");
             int bline = scriptline;
             ScripBuf block; ScripBuf_Init(&block);
             CollectBlockContentRaw(&block);
@@ -694,6 +758,7 @@ static void ProcessIfDirective() {
     ScripBuf_Free(&chosen);
 }
 
+// Handles $switch:  $switch var { $case v { } ... $default { } }
 static void ProcessSwitchDirective() {
     if (++s_conditionalDepth > MAX_CONDITIONAL_NESTING) {
         Error("$switch: maximum nesting depth (%d) exceeded\n", MAX_CONDITIONAL_NESTING);
@@ -710,9 +775,7 @@ static void ProcessSwitchDirective() {
     char switchVal[MAXTOKEN];
     V_strncpy(switchVal, varValPtr, sizeof(switchVal));
 
-    if (!GetToken(true) || stricmp("{", token) != 0) {
-        Error("$switch: expected '{'\n"); --s_conditionalDepth; return;
-    }
+    s_expectBrace("$switch");
 
     bool caseTaken = false; bool hasDefault = false;
     int caseCount = 0;
@@ -728,7 +791,7 @@ static void ProcessSwitchDirective() {
                 Error("$switch: maximum $case count (%d) exceeded\n", MAX_CONDITIONAL_CASE);
             if (!GetToken(false)) { Error("$case: expected value\n"); break; }
             char caseVal[MAXTOKEN]; V_strncpy(caseVal, token, sizeof(caseVal));
-            if (!GetToken(true) || stricmp("{", token) != 0) { Error("$case: expected '{'\n"); break; }
+            s_expectBrace("$case");
             int bline = scriptline;
             ScripBuf block; ScripBuf_Init(&block);
             CollectBlockContentRaw(&block);
@@ -738,7 +801,7 @@ static void ProcessSwitchDirective() {
             ScripBuf_Free(&block);
         } else if (!Q_stricmp("$default", token)) {
             hasDefault = true;
-            if (!GetToken(true) || stricmp("{", token) != 0) { Error("$default: expected '{'\n"); break; }
+            s_expectBrace("$default");
             int bline = scriptline;
             ScripBuf block; ScripBuf_Init(&block);
             CollectBlockContentRaw(&block);
@@ -1579,6 +1642,68 @@ qboolean PeekToken( char *buffer, int bufferSize )
 		buffer[len++] = *p++;
 	buffer[len] = '\0';
 	return len > 0;
+}
+
+// Non-consuming lookahead: if the next significant char is '{', scan the balanced block for
+// a bare word == needle (case-insensitive), skipping quotes/comments. Walks a local cursor
+// copy only, so the tokenizer state is untouched. Returns false if the next char isn't '{'.
+qboolean PeekBlockContainsToken( const char *needle )
+{
+	if ( !script || tokenready || !needle || !needle[0] )
+		return false;
+
+	const char *p   = script->script_p;
+	const char *end = script->end_p;
+
+	// Skip whitespace / comments to the next significant character.
+	while ( p < end )
+	{
+		if ( (unsigned char)*p <= ' ' ) { p++; continue; }
+		if ( (*p == '/' && p+1 < end && *(p+1) == '/') || *p == '#' || *p == ';' )
+		{ while ( p < end && *p != '\n' ) p++; continue; }
+		if ( *p == '/' && p+1 < end && *(p+1) == '*' )
+		{ p += 2; while ( p+1 < end && !(*p == '*' && *(p+1) == '/') ) p++; if ( p+1 < end ) p += 2; continue; }
+		break;
+	}
+
+	if ( p >= end || *p != '{' )
+		return false;
+	p++; // enter the block
+
+	const int needleLen = (int)strlen( needle );
+	int depth = 1;
+	while ( p < end && depth > 0 )
+	{
+		char c = *p;
+		if ( c == '"' )
+		{
+			p++;
+			while ( p < end && *p != '"' ) p++;
+			if ( p < end ) p++;
+			continue;
+		}
+		if ( (c == '/' && p+1 < end && *(p+1) == '/') || c == '#' || c == ';' )
+		{ while ( p < end && *p != '\n' ) p++; continue; }
+		if ( c == '/' && p+1 < end && *(p+1) == '*' )
+		{ p += 2; while ( p+1 < end && !(*p == '*' && *(p+1) == '/') ) p++; if ( p+1 < end ) p += 2; continue; }
+		if ( c == '{' ) { depth++; p++; continue; }
+		if ( c == '}' ) { depth--; p++; continue; }
+		if ( (unsigned char)c <= ' ' ) { p++; continue; }
+
+		// Start of a bare word - measure it, then compare against the needle.
+		const char *wstart = p;
+		while ( p < end )
+		{
+			char wc = *p;
+			if ( (unsigned char)wc <= ' ' || wc == '{' || wc == '}' || wc == '"' || wc == ';' )
+				break;
+			p++;
+		}
+		int wlen = (int)( p - wstart );
+		if ( wlen == needleLen && Q_strnicmp( wstart, needle, needleLen ) == 0 )
+			return true;
+	}
+	return false;
 }
 
 qboolean GetTokenizerStatus( char **pFilename, int *pLine )

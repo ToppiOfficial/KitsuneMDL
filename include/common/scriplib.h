@@ -56,6 +56,9 @@ qboolean TokenAvailable (void);
 // consuming any input or disturbing the tokenready/token globals. Returns the
 // pending token if one was UnGetToken'd. Returns false at end of script.
 qboolean PeekToken (char *buffer, int bufferSize);
+// Non-consuming lookahead: true if the upcoming { } block contains a bare word == needle
+// (case-insensitive). Returns false if the next significant char isn't '{'.
+qboolean PeekBlockContainsToken( const char *needle );
 qboolean GetTokenizerStatus( char **pFilename, int *pLine );
 
 // SCRIPT_LOADED_CALLBACK:

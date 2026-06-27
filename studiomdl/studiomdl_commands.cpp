@@ -177,7 +177,8 @@ bool ParseOptionStudio(CDmeSourceSkin *pSkin) {
 //-----------------------------------------------------------------------------
 // Parse the body command from a .qc file
 //-----------------------------------------------------------------------------
-void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale, bool bFlipTriangles, bool bQuadSubd) {
+void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale, bool bFlipTriangles, bool bQuadSubd,
+                         bool bNoAutoDMXRules) {
     // If the name matches a $rendermesh definition, resolve it to the underlying DMX file.
     s_rendermesh_def_t *pRenderMeshDef = FindRenderMeshDef(pFullPath);
     Q_strncpy(pmodel->filename, pRenderMeshDef ? pRenderMeshDef->filename : pFullPath, sizeof(pmodel->filename));
@@ -194,13 +195,28 @@ void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale
     g_pCurrentModel = pmodel;
 
     if (!pRenderMeshDef) {
-        pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true);
+        if (bNoAutoDMXRules) {
+            // Defer global flex registration (so it stays in the source arrays) and skip the
+            // cache so the stripped source can't pollute a later normal reference.
+            bool bSavedRaw = g_bLoadingRenderMeshRaw;
+            g_bLoadingRenderMeshRaw = true;
+            pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true, /*bUseCache=*/false);
+            g_bLoadingRenderMeshRaw = bSavedRaw;
+        } else {
+            pmodel->source = Load_Source(pmodel->filename, "", bFlipTriangles, true);
+        }
     } else {
         EnsureRenderMeshOwnedSource(pRenderMeshDef, bFlipTriangles);
         // Each model use gets its own clone of the pre-processed owned source.
         pmodel->source = pRenderMeshDef->pOwnedSource
             ? CloneSourceGeometry(pRenderMeshDef->pOwnedSource)
             : nullptr;
+    }
+
+    // Per-model noautodmxrules: drop this model's source flex before FinishStudioModel
+    // registers it. Explicit QC flex in the studio block is parsed later and still applies.
+    if (bNoAutoDMXRules && pmodel->source) {
+        StripSourceFlexData(pmodel->source);
     }
 
     g_pCurrentModel = NULL;
@@ -222,7 +238,8 @@ void ProcessCmdBody(const char *pFullPath, const char *pBodyPartName, float flSc
     g_bodypart[g_numbodyparts].pmodel[0] = g_model[g_nummodels];
     g_bodypart[g_numbodyparts].nummodels = 1;
 
-    ProcessOptionStudio(g_model[g_nummodels], pFullPath, flScale, bFlipTriangles, bQuadSubd);
+    // Bare `$body` has no option block, so it can't carry noautodmxrules.
+    ProcessOptionStudio(g_model[g_nummodels], pFullPath, flScale, bFlipTriangles, bQuadSubd, /*bNoAutoDMXRules=*/false);
 
     // Body command should add any flex commands in the source loaded
     PostProcessSource(g_model[g_nummodels]->source, g_nummodels);
@@ -511,8 +528,11 @@ void Option_Studio(s_model_t *pmodel) {
     pSourceSkin->m_bFlipTriangles = false;
 
     if (ParseOptionStudio(pSourceSkin)) {
+        // Detect noautodmxrules in the upcoming option block before the load (the '{' is still
+        // in the stream) so its flex can be stripped per-model without leaking global flex.
+        bool bNoAutoDMXRules = PeekBlockContainsToken("noautodmxrules");
         ProcessOptionStudio(pmodel, pSourceSkin->GetRelativeFileName(), pSourceSkin->m_flScale,
-                            pSourceSkin->m_bFlipTriangles, pSourceSkin->m_bQuadSubd);
+                            pSourceSkin->m_bFlipTriangles, pSourceSkin->m_bQuadSubd, bNoAutoDMXRules);
     }
     DestroyElement(pSourceSkin);
 }
@@ -534,6 +554,16 @@ int Option_Blank() {
 }
 
 void Option_Model(int imodel); // forward declaration - defined near Cmd_Model
+
+// Adds the source's flex/attachment data, then parses model sub-options.
+// Shared by $body's studio entry and $model.
+static void FinishStudioModel(int imodel) {
+    if (g_model[imodel]->source) {
+        AddBodyFlexData(g_model[imodel]->source, imodel);
+        AddBodyAttachments(g_model[imodel]->source);
+    }
+    Option_Model(imodel);
+}
 
 void Cmd_Bodygroup() {
     int is_started = 0;
@@ -562,14 +592,7 @@ void Cmd_Bodygroup() {
             g_bodypart[g_numbodyparts].nummodels++;
 
             Option_Studio(g_model[g_nummodels]);
-
-            // Body command should add any flex commands in the source loaded
-            if (g_model[g_nummodels]->source) {
-                AddBodyFlexData(g_model[g_nummodels]->source, g_nummodels);
-                AddBodyAttachments(g_model[g_nummodels]->source);
-            }
-
-            Option_Model(g_nummodels);
+            FinishStudioModel(g_nummodels);
 
             g_nummodels++;
         } else if (stricmp("blank", token) == 0) {
@@ -1585,10 +1608,15 @@ void Option_Flexcontroller(s_model_t *pmodel) {
 }
 
 void Option_NoAutoDMXRules(s_source_t *pSource) {
-    // zero out the automatic flex controllers
-    g_numflexcontrollers = 0;
-
+    // The source flex was already stripped at load (pre-scanned in Option_Studio); this just
+    // re-confirms the flag. For the old global behavior use $noautodmxrulesglobal.
     pSource->bNoAutoDMXRules = true;
+}
+
+// $noautodmxrulesglobal - legacy escape hatch: zero every flex controller in the whole
+// compile, reproducing the old global side effect of the noautodmxrules option.
+void Cmd_NoAutoDMXRulesGlobal() {
+    g_numflexcontrollers = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -2510,14 +2538,7 @@ void Cmd_Model() {
     g_numbodyparts++;
 
     Option_Studio(g_model[g_nummodels]);
-
-    if (g_model[g_nummodels]->source) {
-        // Body command should add any flex commands in the source loaded
-        AddBodyFlexData(g_model[g_nummodels]->source, g_nummodels);
-        AddBodyAttachments(g_model[g_nummodels]->source);
-    }
-
-    Option_Model(g_nummodels);
+    FinishStudioModel(g_nummodels);
 
     g_nummodels++;
 }
@@ -7924,11 +7945,10 @@ static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *p
         RebuildGeometryFromKeepMask(pSource, keepFace);
 }
 
-// Strips all facial data from a (cloned) source: flex keys, combination controls/rules,
-// flex controller remaps, and the vertex-animation deltas. With these cleared,
-// AddBodyFlexData / AddBodyFlexRules (run later via PostProcessSource) register no flex
-// controllers, flex rules, or flex keys for this source, so the result has no facial flexing.
-static void ApplyNoFacialFilter(s_source_t *pSource) {
+// Clears all facial data from a source (flex keys, combination controls/rules, flex
+// controller remaps, DMX flex rules, vanim deltas) and sets bNoAutoDMXRules. Returns the
+// flex-key count stripped. Shared by $rendermesh nofacial and the per-model noautodmxrules.
+int StripSourceFlexData(s_source_t *pSource) {
     int nFlexKeys = pSource->m_FlexKeys.Count();
 
     pSource->m_FlexKeys.RemoveAll();
@@ -7953,6 +7973,13 @@ static void ApplyNoFacialFilter(s_source_t *pSource) {
         }
         anim.newStyleVertexAnimations = false;
     }
+
+    return nFlexKeys;
+}
+
+// $rendermesh nofacial: strip the clone's flex (see StripSourceFlexData) and report it.
+static void ApplyNoFacialFilter(s_source_t *pSource) {
+    int nFlexKeys = StripSourceFlexData(pSource);
 
     Msg("$rendermesh: nofacial - stripped %d flex key%s and all flex rules/deltas from '%s'\n",
         nFlexKeys, nFlexKeys == 1 ? "" : "s", pSource->filename);
@@ -9106,6 +9133,7 @@ MDLCommand_t g_Commands[] =
                 {"$addincludedir",                   Cmd_AddIncludeDir,},
                 {"$subd",                            Cmd_SubdivisionSurface,},
                 {"$boneflexdriver",                  Cmd_BoneFlexDriver,},
+                {"$noautodmxrulesglobal",            Cmd_NoAutoDMXRulesGlobal,},
                 {"$modelbudget",                     Cmd_ModelBudget,},
                 {"$preservetriangleorder",           Cmd_PreserveTriangleOrder,},
                 {"$qcassert",                        Cmd_QCAssert,},

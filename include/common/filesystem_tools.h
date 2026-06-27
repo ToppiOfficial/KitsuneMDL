@@ -1,4 +1,4 @@
-//===== Copyright © 1996-2005, Valve Corporation, All rights reserved. ======//
+//===== Copyright ï¿½ 1996-2005, Valve Corporation, All rights reserved. ======//
 //
 // Purpose: 
 //
@@ -20,7 +20,13 @@
 extern char		qdir[1024];
 
 // This is the base engine + mod-specific game dir (e.g. "d:\tf2\mytfmod\")
-extern char		gamedir[1024];	
+extern char		gamedir[1024];
+
+// Optional output override set by -outputdir (trailing slash, empty if unset).
+extern char		g_OutputDir[1024];
+
+// Base directory compiled model files are written to: -outputdir if set, else gamedir.
+const char *GetModelOutputDir();
 
 
 // ---------------------------------------------------------------------------------------- //

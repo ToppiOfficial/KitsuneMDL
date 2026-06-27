@@ -63,7 +63,7 @@ void MdlError(const char *fmt, ...) {
         // undescriptive errors in batch processes could be anonymous
         printf("ERROR: Aborted Processing on '%s'\n", g_outname);
 
-        strcpy(fileName, gamedir);
+        strcpy(fileName, GetModelOutputDir());
         strcat(fileName, "models/");
         strcat(fileName, g_outname);
         Q_FixSlashes(fileName);

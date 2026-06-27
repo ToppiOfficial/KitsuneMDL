@@ -94,6 +94,59 @@ void *kalloc(int num, int size) {
 
 #define FILEBUFFER (32 * 1024 * 1024)
 
+//--------------------------------------------------------------------
+// Auto-sizing for the output scratch buffers.
+//
+// The .mdl/.vvd/.ani writers build each file in a single linear append
+// buffer (everything is stored as relative offsets). The historical
+// fixed 32 MB buffer silently overflowed and corrupted the heap on
+// large models, so we size each buffer to a conservative estimate of
+// its payload, floored at FILEBUFFER so normal models are unaffected.
+// This mirrors the VTX writer's auto-sizing in optimize.cpp. The
+// capacity is bounds-checked before the file is written out, turning a
+// bad estimate into a clean MdlError instead of a crash.
+//--------------------------------------------------------------------
+static int FileBufferSize(int64 nEstimatedBytes, const char *pWhat) {
+    int64 nSize = nEstimatedBytes + (64 * 1024);
+    if (nSize < FILEBUFFER) {
+        nSize = FILEBUFFER;
+    } else {
+        if (nSize > INT_MAX) {
+            nSize = INT_MAX;
+        }
+        if (!g_StudioMdlContext.quiet) {
+            printf("Model is very large! switching to %lld MB %s buffer\n",
+                   (nSize + (1024 * 1024 - 1)) / (1024 * 1024), pWhat);
+        }
+    }
+    return (int) nSize;
+}
+
+//--------------------------------------------------------------------
+// Conservative upper bound on the encoded animation payload. Both the
+// RLE and frame-animation encoders stay well under kBytesPerBoneFrame
+// per bone per frame (RLE ~12 across 6 components, frameanim pos+quat),
+// so this never under-estimates.
+//--------------------------------------------------------------------
+static int64 EstimateAnimationBytes() {
+    const int64 kBytesPerBoneFrame = 64;
+    const int64 nBones = g_StudioMdlContext.numbones > 0 ? g_StudioMdlContext.numbones : 1;
+    int64 total = 0;
+    for (int i = 0; i < g_numani; i++) {
+        s_animation_t *anim = g_panimation[i];
+        if (!anim)
+            continue;
+        int64 frames = anim->numframes > 0 ? anim->numframes : 1;
+        total += frames * nBones * kBytesPerBoneFrame;
+        // ik-rule / local-hierarchy error tracks (6 animvalue arrays each)
+        total += (int64) (anim->numikrules + anim->numlocalhierarchy) *
+                 (256 + 6 * frames * (int64) sizeof(mstudioanimvalue_t));
+        // per-section descriptors
+        total += (int64) anim->numsections * 256;
+    }
+    return total;
+}
+
 void WriteSeqKeyValues(mstudioseqdesc_t *pseqdesc, std::vector<char> *pKeyValue);
 
 //-----------------------------------------------------------------------------
@@ -1980,7 +2033,7 @@ static void WriteVertices(studiohdr_t *phdr) {
     if (!g_nummodelsbeforeLOD)
         return;
 
-    strcpy(fileName, gamedir);
+    strcpy(fileName, GetModelOutputDir());
 //	if( *g_pPlatformName )
 //	{
 //		strcat( fileName, "platform_" );
@@ -1997,7 +2050,25 @@ static void WriteVertices(studiohdr_t *phdr) {
         printf("writing %s:\n", fileName);
     }
 
-    pStart = (byte *) kalloc(1, FILEBUFFER);
+    // Exact payload size: header + (vertex + tangent) per vertex, plus the
+    // optional extra-texcoord block. No fixup table on this first-pass write.
+    int64 nTotalVerts = 0;
+    for (i = 0; i < g_nummodelsbeforeLOD; i++) {
+        s_loddata_t *pLodData = g_model[i]->m_pLodData;
+        if (pLodData)
+            nTotalVerts += pLodData->numvertices;
+    }
+    int64 nVvdEstimate = sizeof(vertexFileHeader_t) + 16
+                         + nTotalVerts * (sizeof(mstudiovertex_t) + sizeof(Vector4D));
+    if (bExtraData) {
+        nVvdEstimate += sizeof(ExtraVertexAttributesHeader_t)
+                        + (int64) sExtraTexcoordsToWrite * sizeof(ExtraVertexAttributeIndex_t)
+                        + (int64) sExtraTexcoordsToWrite * nTotalVerts * 2 * sizeof(float)
+                        + (int64) sExtraTexcoordsToWrite * 4;
+    }
+    int nBufferSize = FileBufferSize(nVvdEstimate, "VVD");
+
+    pStart = (byte *) kalloc(1, nBufferSize);
     pData = pStart;
 
     vertexFileHeader_t *fileHeader = (vertexFileHeader_t *) pData;
@@ -2139,6 +2210,10 @@ static void WriteVertices(studiohdr_t *phdr) {
     }
 
     // fileHeader->length = pData - pStart;
+    if ((int64) (pData - pStart) > nBufferSize) {
+        MdlError("VVD output (%lld bytes) exceeded allocated buffer (%d bytes) for %s\n",
+                 (int64) (pData - pStart), nBufferSize, fileName);
+    }
     {
 //		CP4AutoEditAddFile autop4( fileName );
         SaveFile(fileName, pStart, pData - pStart);
@@ -2945,8 +3020,17 @@ void WriteModelFiles() {
     char filename[260];
     studiohdr_t *phdr;
     studiohdr_t *pblockhdr = 0;
+    int nBlockBufferSize = 0;
 
-    pStart = (byte *) kalloc(1, FILEBUFFER);
+    // Animation data dominates the .mdl payload; everything else is bounded
+    // by counts. Estimate generously and floor at FILEBUFFER (see FileBufferSize).
+    int64 nMdlEstimate = 4 * 1024 * 1024
+                         + (int64) g_StudioMdlContext.numbones * 1024
+                         + (int64) g_sequence.Count() * 8192
+                         + (int64) g_numani * 512
+                         + EstimateAnimationBytes();
+    int nMdlBufferSize = FileBufferSize(nMdlEstimate, "MDL");
+    pStart = (byte *) kalloc(1, nMdlBufferSize);
 
     pBlockData = nullptr;
     pBlockStart = nullptr;
@@ -2957,7 +3041,7 @@ void WriteModelFiles() {
         // write the non-default g_sequence group data to separate files
         sprintf(g_animblockname, "models/%s.ani", g_outname);
 
-        strcpy(filename, gamedir);
+        strcpy(filename, GetModelOutputDir());
         strcat(filename, g_animblockname);
 
         if (*g_szInternalName) {
@@ -2973,7 +3057,8 @@ void WriteModelFiles() {
             blockouthandle = SafeOpenWrite(filename);
         }
 
-        pBlockStart = (byte *) kalloc(1, FILEBUFFER);
+        nBlockBufferSize = FileBufferSize(EstimateAnimationBytes(), "ANI");
+        pBlockStart = (byte *) kalloc(1, nBlockBufferSize);
         pBlockData = pBlockStart;
 
         pblockhdr = (studiohdr_t *) pBlockData;
@@ -2995,7 +3080,7 @@ void WriteModelFiles() {
 
     // strcpy( outname, ExpandPath( outname ) );
 
-    strcpy(filename, gamedir);
+    strcpy(filename, GetModelOutputDir());
 //	if( *g_pPlatformName )
 //	{
 //		strcat( filename, "platform_" );
@@ -3177,6 +3262,10 @@ void WriteModelFiles() {
     // optimizer can ask questions about the materials.
     LoadMaterials(phdr);
 
+    if (phdr->length > nMdlBufferSize) {
+        MdlError("MDL output (%d bytes) exceeded allocated buffer (%d bytes) for %s\n",
+                 phdr->length, nMdlBufferSize, filename);
+    }
     SafeWrite(modelouthandle, pStart, phdr->length);
 
     g_pFileSystem->Close(modelouthandle);
@@ -3185,6 +3274,10 @@ void WriteModelFiles() {
     if (pBlockStart) {
         pblockhdr->length = pBlockData - pBlockStart;
 
+        if (pblockhdr->length > nBlockBufferSize) {
+            MdlError("ANI output (%d bytes) exceeded allocated buffer (%d bytes) for %s\n",
+                     pblockhdr->length, nBlockBufferSize, g_animblockname);
+        }
         SafeWrite(blockouthandle, pBlockStart, pblockhdr->length);
         g_pFileSystem->Close(blockouthandle);
 //		if ( spFileBlockOut.IsValid() ) spFileBlockOut->Add();
@@ -3275,7 +3368,7 @@ const vertexFileHeader_t *mstudiomodel_t::CacheVertexData(void *pModelData) {
     }
 
     // load and persist the vertex file
-    strcpy(filename, gamedir);
+    strcpy(filename, GetModelOutputDir());
 //	if( *g_pPlatformName )
 //	{
 //		strcat( filename, "platform_" );
@@ -3756,7 +3849,7 @@ bool FixupVVDFile(const char *fileName, const studiohdr_t *pStudioHdr, const voi
 
     pVtxHdr = (OptimizedModel::FileHeader_t *) pVtxBuff;
 
-    LoadFile((char *) fileName, &pVvdBuff);
+    int vvdLen = LoadFile((char *) fileName, &pVvdBuff);
 
     pFileHdr_old = (vertexFileHeader_t *) pVvdBuff;
     if (pFileHdr_old->numLODs != 1) {
@@ -3796,8 +3889,12 @@ bool FixupVVDFile(const char *fileName, const studiohdr_t *pStudioHdr, const voi
         numFixups = 0;
     }
 
-    pStart_base = (byte *) malloc(FILEBUFFER);
-    memset(pStart_base, 0, FILEBUFFER);
+    // Rebuilt VVD holds the same vertex data as the loaded file plus the new
+    // relocation fixup table; size to that exactly (floored at FILEBUFFER).
+    int nNewBufSize = FileBufferSize((int64) vvdLen
+                                     + (int64) numFixups * sizeof(vertexFileFixup_t) + 256, "VVD");
+    pStart_base = (byte *) malloc(nNewBufSize);
+    memset(pStart_base, 0, nNewBufSize);
     pStart_new = (byte *) ALIGN(pStart_base, 16);
     pData_new = pStart_new;
 
@@ -3956,6 +4053,10 @@ bool FixupVVDFile(const char *fileName, const studiohdr_t *pStudioHdr, const voi
     }
 
     // pFileHdr_new->length =  pData_new-pStart_new;
+    if ((int64) (pData_new - pStart_base) > nNewBufSize) {
+        MdlError("VVD rebuild (%lld bytes) exceeded allocated buffer (%d bytes) for %s\n",
+                 (int64) (pData_new - pStart_base), nNewBufSize, fileName);
+    }
     {
 //		CP4AutoEditAddFile autop4( fileName );
         SaveFile((char *) fileName, pStart_new, pData_new - pStart_new);
@@ -4207,7 +4308,7 @@ bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr,
     void *preloadedBufs[2]  = { pDx90Buf, pDx80Buf };
     int   preloadedLens[2]  = { dx90Len,  dx80Len  };
 
-    strcpy(filename, gamedir);
+    strcpy(filename, GetModelOutputDir());
 //	if( *g_pPlatformName )
 //	{
 //		strcat( filename, "platform_" );
@@ -4379,7 +4480,9 @@ bool Clamp_VTX_LODS(const char *fileName, int rootLOD, studiohdr_t *pStudioHdr) 
 
     len = LoadFile((char *) fileName, (void **) &pVtxHdr);
 
-    OptimizedModel::FileHeader_t *pNewVtxHdr = (OptimizedModel::FileHeader_t *) calloc(FILEBUFFER, 1);
+    // The clamped VTX only drops LODs, so it is never larger than the source.
+    int nNewVtxBufSize = FileBufferSize(len, "VTX");
+    OptimizedModel::FileHeader_t *pNewVtxHdr = (OptimizedModel::FileHeader_t *) calloc(nNewVtxBufSize, 1);
 
     byte *pData = (byte *) pNewVtxHdr;
     pData += sizeof(OptimizedModel::FileHeader_t);
@@ -4583,6 +4686,10 @@ bool Clamp_VTX_LODS(const char *fileName, int rootLOD, studiohdr_t *pStudioHdr) 
         printf("everything (%d bytes)\n", newLen);
     }
 
+    if (newLen > nNewVtxBufSize) {
+        MdlError("VTX clamp (%d bytes) exceeded allocated buffer (%d bytes) for %s\n",
+                 newLen, nNewVtxBufSize, fileName);
+    }
     {
 //		CP4AutoEditAddFile autop4( fileName );
         SaveFile((char *) fileName, pNewVtxHdr, newLen);
@@ -4613,7 +4720,7 @@ bool Clamp_RootLOD(studiohdr_t *phdr) {
         return true;
     }
 
-    strcpy(filename, gamedir);
+    strcpy(filename, GetModelOutputDir());
     strcat(filename, "models/");
     strcat(filename, g_outname);
     Q_StripExtension(filename, filename, sizeof(filename));
