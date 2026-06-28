@@ -213,10 +213,12 @@ void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale
             : nullptr;
     }
 
-    // Per-model noautodmxrules: drop this model's source flex before FinishStudioModel
-    // registers it. Explicit QC flex in the studio block is parsed later and still applies.
+    // Per-model noautodmxrules: keep this source's morph deltas (so stereo flexes still
+    // split into L/R and eyelid deltas survive) but flag it so AddBodyFlexData/AddBodyFlexRules
+    // skip the auto-generated flex controllers, remaps, and combination rules. Explicit QC
+    // flex in the studio block is parsed later and still applies.
     if (bNoAutoDMXRules && pmodel->source) {
-        StripSourceFlexData(pmodel->source);
+        pmodel->source->bNoAutoDMXRules = true;
     }
 
     g_pCurrentModel = NULL;
@@ -1060,9 +1062,12 @@ void AddBodyFlexData(s_source_t *pSource, int imodel) {
         ++g_numflexkeys;
     }
 
-    AddFlexControllers(pSource);
-
-    AddBodyFlexRemaps(pSource);
+    // noautodmxrules (per-model or $noautodmxrulesglobal): the morph deltas above are kept and
+    // still split L/R, but suppress the auto flex controllers and remaps for this source.
+    if (!pSource->bNoAutoDMXRules && !g_StudioMdlContext.bNoAutoDMXRulesGlobal) {
+        AddFlexControllers(pSource);
+        AddBodyFlexRemaps(pSource);
+    }
 }
 
 
@@ -1613,10 +1618,14 @@ void Option_NoAutoDMXRules(s_source_t *pSource) {
     pSource->bNoAutoDMXRules = true;
 }
 
-// $noautodmxrulesglobal - legacy escape hatch: zero every flex controller in the whole
-// compile, reproducing the old global side effect of the noautodmxrules option.
+// $noautodmxrulesglobal - legacy escape hatch reproducing the old global noautodmxrules side
+// effect. The previous implementation zeroed g_numflexcontrollers outright, which also wiped
+// QC-defined $flexcontrollers and left their $flexrules dangling (crash). Instead it now sets a
+// global flag so every source's AddBodyFlexData/AddBodyFlexRules skips the auto DMX controllers,
+// remaps, and combination rules, while QC flex (and the source morph deltas) stay intact. Acts
+// on sources processed after this command, so place it before the $body/$model blocks.
 void Cmd_NoAutoDMXRulesGlobal() {
-    g_numflexcontrollers = 0;
+    g_StudioMdlContext.bNoAutoDMXRulesGlobal = true;
 }
 
 //-----------------------------------------------------------------------------
@@ -2513,7 +2522,8 @@ void Option_Model(int imodel) {
             TokenError("missing {\n");
     }
 
-    if (g_model[imodel]->source && !g_model[imodel]->source->bNoAutoDMXRules)
+    if (g_model[imodel]->source && !g_model[imodel]->source->bNoAutoDMXRules &&
+        !g_StudioMdlContext.bNoAutoDMXRulesGlobal)
         AddBodyFlexRules(g_model[imodel]->source);
 }
 

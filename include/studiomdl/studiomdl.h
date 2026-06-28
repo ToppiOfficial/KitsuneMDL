@@ -2038,6 +2038,7 @@ struct StudioMdlContext {
     unsigned bNoWarnings: 1;
     unsigned cullAnims: 1;
     unsigned cullMorphs: 1;
+    unsigned bNoAutoDMXRulesGlobal: 1;  // $noautodmxrulesglobal: suppress auto DMX flex on every source
     int g_maxWarnings = -1;
     char g_path[1024];
 
@@ -2135,6 +2136,7 @@ struct StudioMdlContext {
               errorOnSeqRemapFail(0),
               modelIntentionallyHasZeroSequences(0),
               bContentRootRelative(0),
+              bNoAutoDMXRulesGlobal(0),
               minLod(0),
               numAllowedRootLODs(0),
               bHasModelName(0),

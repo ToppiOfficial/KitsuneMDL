@@ -519,6 +519,70 @@ static bool s_compareValues(const char* lhs, const char* op, const char* rhs) {
     return false;
 }
 
+// Membership comparison for in(): numeric when both sides parse as numbers,
+// otherwise a case-insensitive string match (unlike ==, list membership ignores
+// case so e.g. "Zoey" matches "zoey").
+static bool s_inEquals(const char* val, const char* item) {
+    if (s_isNumericStr(val) && s_isNumericStr(item))
+        return strtod(val, nullptr) == strtod(item, nullptr);
+    return Q_stricmp(val, item) == 0;
+}
+
+// in( <varname> [ <item> <item> ... ] )
+// True when <varname>'s value equals any item in the bracketed list. Everything
+// inside the brackets is literal (surrounding quotes are optional and stripped),
+// so quoting individual items is purely cosmetic. A quoted item may contain
+// spaces; bare items are whitespace-delimited. Comparison is numeric when both
+// the value and the item parse as numbers, otherwise a case-insensitive string
+// match.
+static bool s_evalInExpr(const char* expr) {
+    const char* open = strchr(expr, '(');
+    if (!open) { Error("$if: malformed in(...) expression\n"); return false; }
+    const char* p   = open + 1;
+    const char* end = expr + strlen(expr);
+    while (end > p && end[-1] != ')') end--;     // trim to the closing ')'
+    if (end <= p) { Error("$if: malformed in(...) expression\n"); return false; }
+    end--;                                       // content is now [p, end)
+
+    // Variable name: raw name (no $...$), up to whitespace or '['.
+    while (p < end && (unsigned char)*p <= ' ') p++;
+    char vname[256]; int vl = 0;
+    while (p < end && (unsigned char)*p > ' ' && *p != '[' && vl < 255) vname[vl++] = *p++;
+    vname[vl] = '\0';
+    if (vl == 0) { Error("$if: in() requires a variable name\n"); return false; }
+
+    const char* val = LookupVariableValue(vname);
+    if (!val) {
+        Error("$if: undefined variable '%s' in in() (test with None(%s) first)\n", vname, vname);
+        return false;
+    }
+
+    // Bracketed list.
+    while (p < end && *p != '[') p++;
+    if (p >= end) { Error("$if: in(%s ...) expected a '[ ... ]' list\n", vname); return false; }
+    p++;                                         // past '['
+    const char* listEnd = p;
+    while (listEnd < end && *listEnd != ']') listEnd++;
+    if (listEnd >= end) { Error("$if: in(%s ...) missing closing ']'\n", vname); return false; }
+
+    const char* q = p;
+    while (q < listEnd) {
+        while (q < listEnd && (unsigned char)*q <= ' ') q++;
+        if (q >= listEnd) break;
+        char item[MAXTOKEN]; int il = 0;
+        if (*q == '"') {
+            q++;
+            while (q < listEnd && *q != '"' && il < MAXTOKEN - 1) item[il++] = *q++;
+            if (q < listEnd && *q == '"') q++;
+        } else {
+            while (q < listEnd && (unsigned char)*q > ' ' && il < MAXTOKEN - 1) item[il++] = *q++;
+        }
+        item[il] = '\0';
+        if (s_inEquals(val, item)) return true;
+    }
+    return false;
+}
+
 typedef struct { const CondToks* ct; int pos; } CondEval;
 
 static bool ce_atEnd(const CondEval* e) { return e->pos >= e->ct->count; }
@@ -562,6 +626,13 @@ static bool ce_evalAtom(CondEval* e, char* outBuf, int outBufSize) {
         bool neg = !r;
         V_strncpy(outBuf, neg ? "1" : "0", outBufSize);
         return neg;
+    }
+
+    if (Q_strnicmp(t, "in(", 3) == 0 && strlen(t) > 3 && t[strlen(t)-1] == ')') {
+        e->pos++;
+        bool r = s_evalInExpr(t);
+        V_strncpy(outBuf, r ? "1" : "0", outBufSize);
+        return r;
     }
 
     bool literal = e->ct->isLiteral[e->pos];
@@ -671,6 +742,47 @@ static void s_expectBrace(const char* ctx) {
     script->script_p++;
 }
 
+static bool s_ciPrefix(const char* p, const char* end, const char* pat) {
+    for (; *pat; ++p, ++pat) {
+        if (p >= end) return false;
+        char a = *p, b = *pat;
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (b >= 'A' && b <= 'Z') b += 32;
+        if (a != b) return false;
+    }
+    return true;
+}
+
+// An in( <var> [ ... ] ) membership test contains spaces (the bracketed list),
+// so GetToken would shred it. When script_p sits on "in(" - or "not(in(" for a
+// negated test - read the whole balanced-paren expression raw and push it as one
+// token; the evaluator (s_evalInExpr, reached directly or via the Not() branch)
+// parses it later. Returns false (consuming nothing) otherwise.
+static bool s_tryReadInExpr(CondToks* toks) {
+    const char* p   = script->script_p;
+    const char* end = script->end_p;
+    if (!(s_ciPrefix(p, end, "in(") || s_ciPrefix(p, end, "not(in(")))
+        return false;
+
+    char buf[MAXTOKEN]; int len = 0;
+    int depth = 0;
+    while (p < end) {
+        char ch = *p;
+        if (ch == '\n') { script->line++; scriptline = script->line; }
+        if (ch == '(') depth++;
+        else if (ch == ')') depth--;
+        if (len < MAXTOKEN - 1) buf[len++] = ch;
+        else { Error("$if: in(...) expression too long\n"); break; }
+        p++;
+        if (ch == ')' && depth == 0) break;              // consumed the matching ')'
+    }
+    buf[len] = '\0';
+    if (depth != 0) { Error("$if: unterminated in(...) expression\n"); return true; }
+    script->script_p = (char*)p;
+    CondToks_Push(toks, buf, false);
+    return true;
+}
+
 // Read a condition (the tokens up to the opening '{', which is consumed) into
 // `toks`, tagging each token literal/non-literal. A token is literal when it
 // begins with '"' (quoted string) or '$' (a $var$ expansion); bare words are
@@ -680,6 +792,7 @@ static void s_readCondition(CondToks* toks) {
         char c = s_peekSignificant();
         if (c == 0)   { Error("$if: missing '{'\n"); return; }
         if (c == '{') { script->script_p++; return; }   // consume '{'
+        if (s_tryReadInExpr(toks)) continue;            // in( var [ ... ] ) spans spaces
         bool isLit = (c == '"' || c == '$');
         GetToken(true);                                  // expands $var$, strips quotes
         CondToks_Push(toks, token, isLit);

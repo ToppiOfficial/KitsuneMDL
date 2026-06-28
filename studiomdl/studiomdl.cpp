@@ -562,7 +562,8 @@ void PostProcessSource(s_source_t *pSource, int imodel) {
     if (pSource) {
         AddBodyFlexData(pSource, imodel);
         AddBodyAttachments(pSource);
-        AddBodyFlexRules(pSource);
+        if (!pSource->bNoAutoDMXRules && !g_StudioMdlContext.bNoAutoDMXRulesGlobal)
+            AddBodyFlexRules(pSource);
     }
 }
 
